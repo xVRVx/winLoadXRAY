@@ -154,6 +154,10 @@ def highlight_active(tag):
 if not os.path.exists(CONFIGS_DIR):
     os.makedirs(CONFIGS_DIR)
 
+def sanitize_filename(name):
+    # Удаляем недопустимые символы для имени файла в Windows
+    return re.sub(r'[<>:"/\\|?*]', '_', name)
+
 configs = {}
 
 # --- Парсинг VLESS-ссылки ---
@@ -165,6 +169,7 @@ def parse_vless(url):
     params = parse_qs(parsed.query)
     tag = parsed.fragment or f"{address}:{port}"
     tag = unquote(tag)  # Декодируем emoji и кириллицу
+    tag = sanitize_filename(tag)
 
     return {
         "uuid": uuid,
