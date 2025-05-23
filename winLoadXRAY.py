@@ -12,7 +12,8 @@ from urllib.parse import urlparse, parse_qs, unquote
 import winreg
 import re
 
-
+APP_NAME = "winLoadXRAY"
+APP_VERS = "v0.4-beta"
 xray_process = None
 
 active_tag = None
@@ -20,13 +21,15 @@ proxy_enabled = False
 
 base64_urls = []
 
-CONFIGS_DIR = "configs"
-if not os.path.exists(CONFIGS_DIR):
-    os.makedirs(CONFIGS_DIR)
+
+
+CONFIGS_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME, 'configs')
+os.makedirs(CONFIGS_DIR, exist_ok=True)
     
-CONFIG_LIST_FILE = os.path.join(CONFIGS_DIR, "config_list.json")
+#CONFIG_LIST_FILE = os.path.join(CONFIGS_DIR, "config_list.json")
 LINKS_FILE = os.path.join(CONFIGS_DIR, "links.json")
 
+STATE_FILE = os.path.join(CONFIGS_DIR, "state.json")
 
 
 
@@ -39,6 +42,47 @@ XRAY_EXE = resource_path("xray.exe")
 CREATE_NO_WINDOW = 0x08000000
 
 
+def save_state():
+    state = {
+        "active_tag": active_tag,
+        "proxy_enabled": proxy_enabled
+    }
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        print(f"Ошибка сохранения состояния: {e}")
+        
+def load_state():
+    global active_tag, proxy_enabled
+
+    if not os.path.exists(STATE_FILE):
+        return
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        active_tag = state.get("active_tag")
+        proxy_enabled = state.get("proxy_enabled", False)
+
+        if proxy_enabled:
+            
+            toggle_system_proxy()  # включаем системный прокси
+            toggle_system_proxy()  # костыль)
+
+
+        if active_tag and active_tag in configs:
+            highlight_active(active_tag)
+            # Автозапуск Xray
+            config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
+            if os.path.exists(config_path):
+                global xray_process
+                xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
+                btn_run.config(text="Остановить конфиг", bg="lightgreen")
+
+    except Exception as e:
+        print(f"Ошибка загрузки состояния: {e}")
+        
 
 
 def update_proxy_button_color():
@@ -58,7 +102,7 @@ def load_base64_urls():
     listbox.delete(0, tk.END)
 
     for filename in os.listdir(CONFIGS_DIR):
-        if filename.endswith(".json"):
+        if filename.endswith(".json") and filename not in ("links.json", "state.json"):
             try:
                 with open(os.path.join(CONFIGS_DIR, filename), "r", encoding="utf-8") as f:
                     config_data = json.load(f)
@@ -482,7 +526,7 @@ def clear_highlight():
 
 # --- кнопка стоп
 def stop_xray():
-    global xray_process, proxy_enabled
+    global xray_process
 
     if xray_process and xray_process.poll() is None:
         try:
@@ -497,7 +541,7 @@ def stop_xray():
 
 
 def stop_system_proxy():
-    global xray_process, proxy_enabled
+    global proxy_enabled
 
     # Отключаем системный прокси
     try:
@@ -618,7 +662,7 @@ def on_enter_key(event):
 
 root.bind('<Return>', on_enter_key)
 
-root.title("winLoadXRAY v0.2")
+root.title(APP_NAME+" "+APP_VERS)
 
 root.configure(bg="#e8e8e8")
 
@@ -685,13 +729,70 @@ btn_proxy.pack(side=tk.RIGHT, pady=3)
 #tk.Button(root, text="Остановить Xray", command=stop_xray, bg="#ffcccc").pack(pady=3)
 
 
+def get_executable_path():
+    return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+
+def is_in_startup(app_name=APP_NAME):
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_READ
+        )
+        value, _ = winreg.QueryValueEx(key, app_name)
+        winreg.CloseKey(key)
+        return os.path.abspath(value) == get_executable_path()
+    except FileNotFoundError:
+        return False
+
+def add_to_startup(app_name=APP_NAME, path=None):
+    if path is None:
+        path = get_executable_path()
+    key = winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Run",
+        0, winreg.KEY_SET_VALUE
+    )
+    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, path)
+    winreg.CloseKey(key)
+
+def remove_from_startup(app_name=APP_NAME):
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE
+        )
+        winreg.DeleteValue(key, app_name)
+        winreg.CloseKey(key)
+    except FileNotFoundError:
+        pass
+
+# ---- Tkinter UI ----
+
+def toggle_startup():
+    if startup_var.get():
+        add_to_startup()
+    else:
+        remove_from_startup()
+
+startup_var = tk.BooleanVar(value=is_in_startup())
+startup_check = tk.Checkbutton(root, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
+startup_check.pack(side=tk.LEFT, pady=4, padx=14)
+
+
 load_base64_urls()
+load_state()
+
 
 def on_closing():
+    save_state()
     stop_xray()  # Остановим Xray 
     stop_system_proxy()  # Выключим прокси
     root.destroy()  # Закроем окно
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
+
+
 
 root.mainloop()
