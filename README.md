@@ -1,4 +1,4 @@
-# winLoad-XRAY ВПН клиент для Windows
+# winLoadXRAY ВПН клиент для Windows
 VPN приложение для vless tcp reality и голых конфигов ядра XRAY на Windows 10 и 11 (на других не тестировал).
 
 По сути, это python обертка вокруг готового [ядра XRAY](https://github.com/XTLS/Xray-core) для win64.
