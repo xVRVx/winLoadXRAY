@@ -13,7 +13,7 @@ import winreg
 import re
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.4-beta"
+APP_VERS = "v0.41-beta"
 xray_process = None
 
 active_tag = None
@@ -276,7 +276,8 @@ def generate_config(data, local_port=2080):
             "rules": [
                 {
                     "domain": [
-                        "geosite:category-ads"
+                        "geosite:category-ads",
+                        "geosite:win-spy"
                     ],
                     "outboundTag": "block"
                 },
@@ -298,21 +299,38 @@ def generate_config(data, local_port=2080):
                         "geosite:twitch",
                         "geosite:yandex",
                         "geosite:vk",
-                        "geosite:category-gov-ru"
+                        "geosite:microsoft",
+                        "geosite:win-update",
+                        "geosite:win-extra",
+                        "geosite:google-play",
+                        "geosite:steam",
+                        "geosite:category-ru"
                     ],
                     "outboundTag": "direct"
                 },
                 {
                     "ip": [
+                        "geoip:private",
                         "geoip:ru",
-                        "geoip:private"
+                        "geoip:by",
+                        "geoip:kz"
+                        
                     ],
                     "outboundTag": "direct"
                 },
                 {
-                    "type": "field",
                     "ip": [
                         "geoip:!ru"
+                    ],
+                    "outboundTag": "proxy"
+                },
+                {
+                    "domain": [
+                        "geosite:discord",
+                        "geosite:youtube",
+                        "geosite:tiktok",
+                        "geosite:signal"
+
                     ],
                     "outboundTag": "proxy"
                 }
@@ -331,6 +349,7 @@ def generate_config(data, local_port=2080):
         ],
         "outbounds": [
             {
+                "tag": "proxy",
                 "protocol": "vless",
                 "settings": {
                     "vnext": [
