@@ -23,7 +23,7 @@ python winLoadXRAY.py
 ```
 **Сборка:**
 ```bash
-pyinstaller --onefile --windowed --icon=icon.ico --add-binary "xray.exe;." --add-binary "geoip.dat;." --add-binary "geosite.dat;."  --add-data "ico.png;." winLoadXRAY.py
+pyinstaller --onefile --windowed --icon=icon.ico --add-binary "xray.exe;." --add-binary "geoip.dat;." --add-binary "geosite.dat;."  --add-data "ico.png;." --add-data "icon.ico;." --add-data "logo.png;." winLoadXRAY.py
 ```
 
 **Последняя версия скомпилирована с:**
