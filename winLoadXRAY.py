@@ -13,7 +13,7 @@ import winreg
 import re
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.41-beta"
+APP_VERS = "v0.42-beta"
 xray_process = None
 
 active_tag = None
