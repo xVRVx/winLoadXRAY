@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, filedialog, Text, Entry
+from tkinter import messagebox, filedialog, PhotoImage
 from PIL import Image, ImageTk
 import base64
 import requests
@@ -645,6 +645,16 @@ def cmd_select_all():
 
 # --- Интерфейс ---
 root = tk.Tk()
+
+
+
+icon_path = resource_path("logo.png")
+icon = PhotoImage(file=icon_path)
+root.iconphoto(True, icon)
+
+icon_path = resource_path("icon.ico")
+root.iconbitmap(icon_path)
+
 root.minsize(400, 280)
 
 def keypress(e):
