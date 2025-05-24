@@ -29,3 +29,9 @@ pyinstaller --onefile --windowed --icon=icon.ico --add-binary "xray.exe;." --add
 **Последняя версия скомпилирована с:**
 
 https://github.com/XTLS/Xray-core/releases/download/v25.5.16/Xray-windows-64.zip
+
+**Скриншот:**
+
+<img src="screen.png" alt="Скриншот" width="400"/>
+
+
