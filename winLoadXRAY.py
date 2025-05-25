@@ -13,14 +13,13 @@ import winreg
 import re
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.42-beta"
+APP_VERS = "v0.43-beta"
 xray_process = None
 
 active_tag = None
 proxy_enabled = False
 
 base64_urls = []
-
 
 
 CONFIGS_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME, 'configs')
@@ -30,7 +29,6 @@ os.makedirs(CONFIGS_DIR, exist_ok=True)
 LINKS_FILE = os.path.join(CONFIGS_DIR, "links.json")
 
 STATE_FILE = os.path.join(CONFIGS_DIR, "state.json")
-
 
 
 def resource_path(relative_path):
@@ -646,8 +644,6 @@ def cmd_select_all():
 # --- Интерфейс ---
 root = tk.Tk()
 
-
-
 icon_path = resource_path("logo.png")
 icon = PhotoImage(file=icon_path)
 root.iconphoto(True, icon)
@@ -676,6 +672,7 @@ def select_config():
     highlight_active(tag)
 
 def on_enter_key(event):
+    global xray_process
     if entry == root.focus_get():
         add_from_url()
     else:
@@ -685,8 +682,11 @@ def on_enter_key(event):
             if active >= 0:
                 listbox.selection_clear(0, tk.END)
                 listbox.selection_set(active)
-        run_selected()
-
+        if xray_process and xray_process.poll() is None:        
+            run_selected()
+            run_selected()
+        else:
+            run_selected()
 
 
 root.bind('<Return>', on_enter_key)
@@ -798,7 +798,6 @@ def remove_from_startup(app_name=APP_NAME):
         pass
 
 # ---- Tkinter UI ----
-
 def toggle_startup():
     if startup_var.get():
         add_to_startup()
@@ -821,7 +820,6 @@ def on_closing():
     root.destroy()  # Закроем окно
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
-
 
 
 root.mainloop()
