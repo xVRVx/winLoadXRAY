@@ -14,7 +14,7 @@ import re
 import socket
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.51-beta"
+APP_VERS = "v0.52-beta"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -989,6 +989,7 @@ def on_closing():
     save_state()
     stop_xray()  # Остановим Xray 
     stop_system_proxy()  # Выключим прокси
+    stop_tun2proxy()   # Выключим tun режим
     root.destroy()  # Закроем окно
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
