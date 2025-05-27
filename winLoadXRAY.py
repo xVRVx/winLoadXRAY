@@ -13,7 +13,7 @@ import winreg
 import re
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.43-beta"
+APP_VERS = "v0.44-beta"
 xray_process = None
 
 active_tag = None
@@ -617,6 +617,7 @@ def cmd_paste():
             widget.insert("1.0" if isinstance(widget, tk.Text) else 0, clipboard_text)
     except:
         pass
+    stop_xray()    
     add_from_url()
 
 def cmd_cut():
