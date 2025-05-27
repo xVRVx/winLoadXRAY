@@ -11,10 +11,13 @@ import subprocess
 from urllib.parse import urlparse, parse_qs, unquote
 import winreg
 import re
+import socket
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.44-beta"
+APP_VERS = "v0.51-beta"
 xray_process = None
+tun_process = None
+tun_enabled = False
 
 active_tag = None
 proxy_enabled = False
@@ -35,7 +38,9 @@ def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
+    
 XRAY_EXE = resource_path("xray.exe")
+
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -257,7 +262,7 @@ def parse_shadowsocks(url):
     }
 
 # --- Генерация конфигурации XRAY ---
-def generate_config(data, local_port=2080):
+def generate_config(data):
     config = {
         "dns": {
             "servers": [
@@ -339,7 +344,7 @@ def generate_config(data, local_port=2080):
                 "tag": "socks-sb",
                 "protocol": "socks",
                 "listen": "127.0.0.1",
-                "port": local_port,
+                "port": 2080,
                 "settings": {
                     "udp": True
                 }
@@ -804,11 +809,177 @@ def toggle_startup():
         add_to_startup()
     else:
         remove_from_startup()
+        
+frame = tk.Frame(root)
+frame.pack(padx=10, pady=5)
 
 startup_var = tk.BooleanVar(value=is_in_startup())
-startup_check = tk.Checkbutton(root, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
+startup_check = tk.Checkbutton(frame, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
 startup_check.pack(side=tk.LEFT, pady=4, padx=14)
 
+def get_default_interface():
+    ps_command = r"""
+    $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1
+    $iface = Get-NetIPInterface | Where-Object { $_.InterfaceIndex -eq $route.InterfaceIndex }
+    if ($iface -is [array]) {
+        $iface[0].InterfaceAlias
+    } else {
+        $iface.InterfaceAlias
+    }
+    """
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8"
+    )
+    return result.stdout.strip()
+    
+    
+def resolve_ips_from_url(url):
+    try:
+        info = socket.getaddrinfo(url, None)
+        return list(set(item[4][0] for item in info))
+    except socket.gaierror as e:
+        print(f"[!] Не удалось определить IP для {url}: {e}")
+        return []    
+    
+def patch_direct_out_interface(config_dir, interface_name):
+    for filename in os.listdir(config_dir):
+        if filename.endswith(".json") and filename not in ("links.json", "state.json"):
+            filepath = os.path.join(config_dir, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+
+                modified = False
+                resolved_ips = []
+
+                # Обработка outbounds — назначаем интерфейс и собираем адреса для резолва
+                if isinstance(config.get("outbounds"), list):
+                    for outbound in config["outbounds"]:
+                        if outbound.get("tag") == "direct" and outbound.get("protocol") == "freedom":
+                            outbound["streamSettings"] = {
+                                "sockopt": {
+                                    "interface": interface_name
+                                }
+                            }
+                            modified = True
+
+                        # Получаем URL из настроек, если есть
+                        if "settings" in outbound and isinstance(outbound["settings"], dict):
+                            vnext_list = outbound["settings"].get("vnext")
+                            if isinstance(vnext_list, list):
+                                for vnext in vnext_list:
+                                    address = vnext.get("address")
+                                    if address and not address.replace('.', '').isdigit():
+                                        ips = resolve_ips_from_url(address)
+                                        if ips:
+                                            resolved_ips.extend(ips)
+                                    print("Привет, ip получены!")
+
+                # Удаляем дубликаты IP
+                resolved_ips = list(set(resolved_ips))
+
+                # Вставляем правило в начало routing.rules
+                if resolved_ips:
+                    rule = {
+                        "ip": resolved_ips,
+                        "outboundTag": "direct"
+                    }
+
+                    if "routing" not in config:
+                        config["routing"] = {"rules": []}
+                    if "rules" not in config["routing"]:
+                        config["routing"]["rules"] = []
+
+                    config["routing"]["rules"].insert(0, rule)
+                    modified = True
+
+                if modified:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        json.dump(config, f, indent=2, ensure_ascii=False)
+                    print(f"[✓] Обновлён файл: {filename}")
+                else:
+                    print(f"[ ] Пропущен (без изменений): {filename}")
+
+            except Exception as e:
+                print(f"[!] Ошибка в файле {filename}: {e}")
+                
+                
+
+def start_tun2proxy():
+    global tun_process
+    cmd = [
+        resource_path("tun2proxy/tun2proxy-bin.exe"),
+        "--proxy", "socks5://127.0.0.1:2080"
+    ]
+    tun_process = subprocess.Popen(cmd)
+    print(f"tun2proxy запущен с PID {tun_process.pid}")
+
+
+def stop_tun2proxy():
+    global tun_process
+    if tun_process and tun_process.poll() is None:
+        tun_process.terminate()
+        tun_process.wait()
+        print("tun2proxy остановлен")
+    tun_process = None
+
+ 
+def restart_xray_with_active():
+    global xray_process
+    if not active_tag:
+        print("Нет активного тега для перезапуска.")
+        return
+
+    config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
+    if not os.path.exists(config_path):
+        print(f"Конфиг не найден: {config_path}")
+        return
+
+    stop_xray()
+    try:
+        xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
+        highlight_active(active_tag)
+        btn_run.config(text="Остановить конфиг", bg="lightgreen")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось перезапустить Xray: {e}")
+ 
+def vrv_tun_mode_toggle():
+    global tun_enabled, active_tag
+
+    if not tun_enabled:
+        # ВКЛ
+        interface = get_default_interface()
+        patch_direct_out_interface(CONFIGS_DIR, interface)
+        saved_tag = active_tag
+        stop_xray()
+        if saved_tag:
+            active_tag = saved_tag
+            restart_xray_with_active()
+        start_tun2proxy()
+        btn_tun.config(text="Выключить TUN", bg="#ffcccc")
+        tun_enabled = True
+    else:
+        # ВЫКЛ
+        stop_tun2proxy()
+        saved_tag = active_tag
+        stop_xray()
+        if saved_tag:
+            active_tag = saved_tag
+            restart_xray_with_active()
+        btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
+        tun_enabled = False
+
+
+
+
+    
+btn_tun = tk.Button(frame, text="Включить TUN", font=("Arial", 12), command=vrv_tun_mode_toggle)
+tooltip = ToolTip(btn_tun, "Только от имени Администратора! Ожидание 30 сек.")
+btn_tun.pack(side=tk.RIGHT, pady=3)
 
 load_base64_urls()
 load_state()
