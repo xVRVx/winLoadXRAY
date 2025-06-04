@@ -12,9 +12,10 @@ from urllib.parse import urlparse, parse_qs, unquote
 import winreg
 import re
 import socket
+import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.52-beta"
+APP_VERS = "v0.54-beta"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -192,6 +193,7 @@ def highlight_active(tag):
         idx = listbox.get(0, tk.END).index(tag)
         listbox.itemconfig(idx, {'bg': 'lightgreen', 'fg': 'black'})
         active_tag = tag
+        save_state()
     except ValueError:
         active_tag = None
 
@@ -415,6 +417,7 @@ def toggle_system_proxy(host="127.0.0.1", port=2080):
                 winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
                 proxy_enabled = False
                 btn_proxy.config(text="Включить системный прокси")
+        save_state()
         update_proxy_button_color()
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось переключить прокси: {e}")
@@ -513,6 +516,7 @@ def run_selected():
 
     if xray_process and xray_process.poll() is None:
         stop_xray()
+        save_state()
         btn_run.config(text="Запустить конфиг", bg="SystemButtonFace")
         return
 
@@ -530,6 +534,7 @@ def run_selected():
     try:
         xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
         highlight_active(tag)
+        save_state()
         btn_run.config(text="Остановить конфиг", bg="lightgreen")
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось запустить Xray: {e}")
@@ -946,30 +951,57 @@ def restart_xray_with_active():
         btn_run.config(text="Остановить конфиг", bg="lightgreen")
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось перезапустить Xray: {e}")
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    script = get_executable_path()
+    params = ""  # можно передать аргументы, если нужно
+    try:
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", script, params, None, 1
+        )
+        save_state()
+        stop_xray()
+        stop_system_proxy()
+        sys.exit()  # завершить текущий процесс
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось получить права администратора: {e}")
+
  
 def vrv_tun_mode_toggle():
     global tun_enabled, active_tag
+
+    if not is_admin():
+        # answer = messagebox.askyesno("Требуются права", "Нужно запустить с правами администратора. Перезапустить?")
+        # if answer:
+            run_as_admin()
+        # return
 
     if not tun_enabled:
         # ВКЛ
         interface = get_default_interface()
         patch_direct_out_interface(CONFIGS_DIR, interface)
-        saved_tag = active_tag
-        stop_xray()
-        if saved_tag:
-            active_tag = saved_tag
-            restart_xray_with_active()
+        # saved_tag = active_tag
+        # stop_xray()
+        # if saved_tag:
+            # active_tag = saved_tag
+            # restart_xray_with_active()
         start_tun2proxy()
         btn_tun.config(text="Выключить TUN", bg="#ffcccc")
         tun_enabled = True
     else:
         # ВЫКЛ
         stop_tun2proxy()
-        saved_tag = active_tag
-        stop_xray()
-        if saved_tag:
-            active_tag = saved_tag
-            restart_xray_with_active()
+        # saved_tag = active_tag
+        # stop_xray()
+        # if saved_tag:
+            # active_tag = saved_tag
+            # restart_xray_with_active()
         btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
         tun_enabled = False
 
@@ -987,7 +1019,7 @@ load_state()
 
 def on_closing():
     save_state()
-    stop_xray()  # Остановим Xray 
+    stop_xray()
     stop_system_proxy()  # Выключим прокси
     stop_tun2proxy()   # Выключим tun режим
     root.destroy()  # Закроем окно
