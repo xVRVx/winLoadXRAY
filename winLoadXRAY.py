@@ -15,7 +15,7 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.54-beta"
+APP_VERS = "v0.55-beta"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -944,7 +944,6 @@ def restart_xray_with_active():
         print(f"Конфиг не найден: {config_path}")
         return
 
-    stop_xray()
     try:
         xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
         highlight_active(active_tag)
@@ -986,22 +985,19 @@ def vrv_tun_mode_toggle():
         # ВКЛ
         interface = get_default_interface()
         patch_direct_out_interface(CONFIGS_DIR, interface)
-        # saved_tag = active_tag
-        # stop_xray()
-        # if saved_tag:
-            # active_tag = saved_tag
-            # restart_xray_with_active()
+
+        saved_tag = active_tag
+        stop_xray()
+        if saved_tag:
+            active_tag = saved_tag
+            restart_xray_with_active()
+           
         start_tun2proxy()
         btn_tun.config(text="Выключить TUN", bg="#ffcccc")
         tun_enabled = True
     else:
         # ВЫКЛ
         stop_tun2proxy()
-        # saved_tag = active_tag
-        # stop_xray()
-        # if saved_tag:
-            # active_tag = saved_tag
-            # restart_xray_with_active()
         btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
         tun_enabled = False
 
