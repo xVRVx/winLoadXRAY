@@ -15,7 +15,7 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.55-beta"
+APP_VERS = "v0.56-beta"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -425,7 +425,8 @@ def toggle_system_proxy(host="127.0.0.1", port=2080):
 
 def add_from_url():
     global base64_urls
-
+    stop_xray()
+    stop_system_proxy()
     input_text = entry.get().strip()
 
     # Очистка старых данных
@@ -715,7 +716,7 @@ frame.pack(padx=10, pady=5)
 entry = tk.Entry(frame, width=35, bg="#fff", fg="#000", insertbackground="#ffffff", font=("Arial", 12))
 entry.pack(side="left", padx=10, pady=0, ipady=3)
 
-tooltip = ToolTip(entry, "Вставьте сюда URL подписки или конфиг XRAY")
+tooltip = ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
 
 # вставка из буфера обмена
 # def add_from_clipboard_and_parse():
@@ -737,7 +738,7 @@ icon = ImageTk.PhotoImage(img)
 btnBuffer = tk.Button(frame, image=icon, command=add_from_url, bg="#d1efff")
 btnBuffer.pack(side="right", pady=3)
 
-tooltip = ToolTip(btnBuffer, "Обновить")
+tooltip = ToolTip(btnBuffer, "Обновить подписку")
 
 
 
