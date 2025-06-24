@@ -15,7 +15,8 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.56-beta"
+APP_VERS = "v0.57-beta"
+XRAY_VERS = "v25.6.8"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -40,7 +41,7 @@ def resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
     
-XRAY_EXE = resource_path("xray.exe")
+XRAY_EXE = resource_path("xray/xray.exe")
 
 
 CREATE_NO_WINDOW = 0x08000000
@@ -301,7 +302,6 @@ def generate_config(data):
                         "geosite:xiaomi",
                         "geosite:category-android-app-download",
                         "geosite:f-droid",
-                        "geosite:twitch",
                         "geosite:yandex",
                         "geosite:vk",
                         "geosite:microsoft",
@@ -334,6 +334,7 @@ def generate_config(data):
                         "geosite:discord",
                         "geosite:youtube",
                         "geosite:tiktok",
+                        "geosite:twitch",
                         "geosite:signal"
 
                     ],
@@ -656,11 +657,11 @@ def cmd_select_all():
 # --- Интерфейс ---
 root = tk.Tk()
 
-icon_path = resource_path("logo.png")
+icon_path = resource_path("img/logo.png")
 icon = PhotoImage(file=icon_path)
 root.iconphoto(True, icon)
 
-icon_path = resource_path("icon.ico")
+icon_path = resource_path("img/icon.ico")
 root.iconbitmap(icon_path)
 
 root.minsize(400, 280)
@@ -730,7 +731,7 @@ tooltip = ToolTip(entry, "Вставьте сюда URL подписки или 
 
 
 # Загрузка изображения (иконки)
-img = Image.open(resource_path("ico.png"))  # путь к вашей картинке
+img = Image.open(resource_path("img/ico.png"))  # путь к вашей картинке
 img = img.resize((35, 35), Image.Resampling.LANCZOS)
 icon = ImageTk.PhotoImage(img)
 
