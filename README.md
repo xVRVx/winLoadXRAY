@@ -14,7 +14,7 @@ VPN приложение для vless tcp reality и голых конфигов
 - tun режим (от администратора)
 
 
-## Внимание! Предустановлен роутинг для ру зоны, ру сайты в direct.
+## Внимание! Предустановлен роутинг для ru зоны, ru сайты в direct.
 
 **Запустить:**
 Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
