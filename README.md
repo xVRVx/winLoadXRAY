@@ -17,7 +17,7 @@ VPN приложение для vless tcp reality и голых конфигов
 ## Внимание! Предустановлен роутинг для ру зоны, ру сайты в direct.
 
 **Запустить:**
-Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите рядом с файлом winLoadXRAY.py, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
+Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
 ```bash
 cd C:\Xray-windows-64
 
@@ -25,19 +25,19 @@ python winLoadXRAY.py
 ```
 **Сборка:**
 ```bash
-pyinstaller --onefile --windowed --icon=icon.ico --add-binary "xray.exe;." --add-binary "geoip.dat;." --add-binary "geosite.dat;." --add-data "ico.png;." --add-data "icon.ico;." --add-data "logo.png;." --add-data "tun2proxy/tun2proxy-bin.exe;tun2proxy" --add-data "tun2proxy/tun2proxy.dll;tun2proxy" --add-data "tun2proxy/wintun.dll;tun2proxy" --add-data "tun2proxy/udpgw-server.exe;tun2proxy" winLoadXRAY.py
+pyinstaller --onefile --windowed --icon=img/icon.ico --add-binary "xray/xray.exe;xray" --add-binary "xray/geoip.dat;xray" --add-binary "xray/geosite.dat;xray" --add-data "img/ico.png;img" --add-data "img/icon.ico;img" --add-data "img/logo.png;img" --add-data "tun2proxy/tun2proxy-bin.exe;tun2proxy" --add-data "tun2proxy/tun2proxy.dll;tun2proxy" --add-data "tun2proxy/wintun.dll;tun2proxy" --add-data "tun2proxy/udpgw-server.exe;tun2proxy" winLoadXRAY.py
 ```
 
 
 **Последняя версия скомпилирована с:**
 
-https://github.com/XTLS/Xray-core/releases/download/v25.5.16/Xray-windows-64.zip
+https://github.com/XTLS/Xray-core/releases/download/v25.6.8/Xray-windows-64.zip
 
 
 https://github.com/tun2proxy/tun2proxy/releases/download/v0.7.9/tun2proxy-x86_64-pc-windows-msvc.zip
 
 **Скриншот:**
 
-<img src="screen.png" alt="Скриншот" width="400"/>
+<img src="img/screen.png" alt="Скриншот" width="400"/>
 
 
