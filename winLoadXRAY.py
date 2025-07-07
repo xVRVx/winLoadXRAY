@@ -15,7 +15,7 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.57-beta"
+APP_VERS = "v0.61-beta"
 XRAY_VERS = "v25.6.8"
 xray_process = None
 tun_process = None
@@ -129,52 +129,8 @@ def load_base64_urls():
 
         entry.delete(0, tk.END)
         entry.insert(0, link)
-
-        try:
-            if link.startswith("vless://"):
-                data = parse_vless(link)
-                tag = data["tag"]
-                if tag not in configs:
-                    configs[tag] = data
-                    listbox.insert(tk.END, tag)
-                    config_json = generate_config(data)
-                    with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
-                        f.write(config_json)
-
-            elif link.startswith("http"):
-                r = requests.get(link)
-                r.raise_for_status()
-
-                # Попытка base64 с vless
-                try:
-                    decoded = base64.b64decode(r.text.strip()).decode("utf-8")
-                    lines = [l for l in decoded.splitlines() if l.startswith("vless://")]
-                    if lines:
-                        for line in lines:
-                            data = parse_vless(line)
-                            tag = data["tag"]
-                            if tag not in configs:
-                                configs[tag] = data
-                                listbox.insert(tk.END, tag)
-                                config_json = generate_config(data)
-                                with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
-                                    f.write(config_json)
-                        return
-                except Exception:
-                    pass
-
-                # JSON без base64
-                clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
-                config_data = json.loads(clean_content)
-                tag = config_data.get("tag", "default_config")
-                if tag not in configs:
-                    configs[tag] = config_data
-                    listbox.insert(tk.END, tag)
-                    with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
-                        json.dump(config_data, f, indent=2, ensure_ascii=False)
-
-        except Exception as e:
-            print(f"Ошибка при загрузке ссылки: {e}")
+        # if listbox.size() > 0:
+            # listbox.select_set(0)
 
 
 # --- Функция подсветки активного тега: ---
@@ -222,6 +178,7 @@ def parse_vless(url):
     tag = sanitize_filename(tag)
 
     return {
+        "protocol": "vless",
         "uuid": uuid,
         "address": address,
         "port": port,
@@ -230,6 +187,7 @@ def parse_vless(url):
         "flow": params.get("flow", [""])[0],
         "sni": params.get("sni", [""])[0],
         "pbk": params.get("pbk", [""])[0],
+        "fp": params.get("fp", [""])[0],
         "sid": params.get("sid", [""])[0],
         "path": params.get("path", [""])[0],
         "tag": tag
@@ -256,8 +214,8 @@ def parse_shadowsocks(url):
         raise ValueError("Некорректный формат Shadowsocks ссылки")
 
     return {
-        "tag": tag,
         "protocol": "shadowsocks",
+        "tag": tag,
         "server": server,
         "port": int(port),
         "method": method,
@@ -276,7 +234,6 @@ def generate_config(data):
             ]
         },
         "log": {"loglevel": "warning"},
-        
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
@@ -341,7 +298,7 @@ def generate_config(data):
                     "outboundTag": "proxy"
                 }
             ]
-    },        
+    },
         "inbounds": [
             {
                 "tag": "socks-sb",
@@ -353,54 +310,67 @@ def generate_config(data):
                 }
             }
         ],
-        "outbounds": [
-            {
-                "tag": "proxy",
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [
-                        {
-                            "address": data["address"],
-                            "port": data["port"],
-                            "users": [
-                                {
-                                    "id": data["uuid"],
-                                    "encryption": "none",
-                                    "flow": data["flow"],
-                                    "level": 0
-                                }
-                            ]
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": data["network"],
-                    "security": data["security"]
-                }
-            },
-            {
-                "protocol": "freedom",
-                "tag": "direct"
-            },
-            {
-                "protocol": "blackhole",
-                "tag": "block"
-            }
-        ]
+        "outbounds": []
     }
 
-    if data["security"] == "reality":
-        config["outbounds"][0]["streamSettings"]["realitySettings"] = {
-            "serverName": data["sni"],
-            "publicKey": data["pbk"],
-            "shortId": data["sid"],
-            "fingerprint": "chrome"
-        }
+    if data["protocol"] == "shadowsocks":
+        config["outbounds"].append({
+            "protocol": "shadowsocks",
+            "tag": "proxy",
+            "settings": {
+                "servers": [
+                    {
+                        "address": data["server"],
+                        "port": data["port"],
+                        "method": data["method"],
+                        "password": data["password"]
+                    }
+                ]
+            }
+        })
+    else:  # VLESS
+        config["outbounds"].append({
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": data["address"],
+                        "port": data["port"],
+                        "users": [
+                            {
+                                "id": data["uuid"],
+                                "encryption": "none",
+                                "flow": data["flow"],
+                                "level": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": data["network"],
+                "security": data["security"]
+            }
+        })
+        if data["security"] == "reality":
+            config["outbounds"][0]["streamSettings"]["realitySettings"] = {
+                "serverName": data["sni"],
+                "publicKey": data["pbk"],
+                "shortId": data["sid"],
+                "fingerprint": data["fp"]
+            }
+        if data["network"] == "xhttp":
+            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto"}
 
-    if data["network"] == "xhttp":
-        config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto"}
+    # Общие outbounds
+    config["outbounds"].extend([
+        {"protocol": "freedom", "tag": "direct"},
+        {"protocol": "blackhole", "tag": "block"}
+    ])
 
     return json.dumps(config, indent=2)
+
 
 
 # --- Системный прокси ---
@@ -459,6 +429,22 @@ def add_from_url():
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось распарсить VLESS ссылку: {e}")
         return
+    elif input_text.startswith("ss://"):
+        try:
+            data = parse_shadowsocks(input_text)
+            tag = data["tag"]
+            configs[tag] = data
+            listbox.insert(tk.END, tag)
+            config_json = generate_config(data)
+            with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
+                f.write(config_json)
+            base64_urls.append(input_text)
+            save_base64_urls()
+            messagebox.showinfo("Добавлено", f"Добавлен SS конфиг: {tag}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось распарсить SS ссылку: {e}")
+        return
+
 
     if input_text.startswith("https"):
         try:
@@ -468,9 +454,28 @@ def add_from_url():
             try:
                 # Попытка base64-декодирования как раньше
                 decoded = base64.b64decode(r.text.strip()).decode("utf-8")
-                lines = [l for l in decoded.splitlines() if l.startswith("vless://")]
+                lines = [l.strip() for l in decoded.splitlines() if l.startswith("vless://") or l.startswith("ss://")]
                 if not lines:
-                    raise ValueError("Нет vless ссылок в base64 декодированном тексте")
+                    raise ValueError("Нет vless или ss ссылок в base64 декодированном тексте")
+                for line in lines:
+                    try:
+                        if line.startswith("vless://"):
+                            data = parse_vless(line)
+                        elif line.startswith("ss://"):
+                            data = parse_shadowsocks(line)
+                        else:
+                            continue
+
+                        tag = data["tag"]
+                        if tag not in configs:
+                            configs[tag] = data
+                            listbox.insert(tk.END, tag)
+                            config_json = generate_config(data)
+                            with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
+                                f.write(config_json)
+                    except Exception as e:
+                        print(f"[!] Ошибка в строке: {line}\n{e}")
+
             except Exception:
                 # Если base64 не прокатил — пытаемся загрузить как чистый JSON (с очисткой html)
                 import re
@@ -489,16 +494,6 @@ def add_from_url():
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось распарсить JSON конфиг: {e}")
                     return
-
-            # Если base64 с vless ссылками успешно распарсились
-            for line in lines:
-                data = parse_vless(line)
-                tag = data["tag"]
-                configs[tag] = data
-                listbox.insert(tk.END, tag)
-                config_json = generate_config(data)
-                with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
-                    f.write(config_json)
 
             base64_urls.append(input_text)
             save_base64_urls()
