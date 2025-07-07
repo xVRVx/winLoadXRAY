@@ -4,8 +4,8 @@ VPN приложение для vless tcp reality и голых конфигов
 По сути это python обертка вокруг готового [ядра XRAY](https://github.com/XTLS/Xray-core) для win64, также используется [tun2proxy](https://github.com/tun2proxy/tun2proxy) для tun режима.
 
 **Умеет:**
-- парсить подписку и запускать vless tcp reality и xhttp reality в mode:auto
-- парсить голый vless://
+- парсить подписку и запускать vless raw reality, shadowsocks и xhttp reality в mode:auto
+- парсить голый vless:// и ss://
 - парсить чистый конфиг xray для клиента.
 
 **Запускает:**
