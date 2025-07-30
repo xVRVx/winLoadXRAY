@@ -15,7 +15,7 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.61-beta"
+APP_VERS = "v0.62-beta"
 XRAY_VERS = "v25.6.8"
 xray_process = None
 tun_process = None
@@ -272,11 +272,7 @@ def generate_config(data):
                 },
                 {
                     "ip": [
-                        "geoip:private",
-                        "geoip:ru",
-                        "geoip:by",
-                        "geoip:kz"
-                        
+                        "geoip:private"                        
                     ],
                     "outboundTag": "direct"
                 },
