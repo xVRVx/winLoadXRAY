@@ -15,8 +15,8 @@ import socket
 import ctypes
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.62-beta"
-XRAY_VERS = "v25.6.8"
+APP_VERS = "v0.63-beta"
+XRAY_VERS = "v25.8.3"
 xray_process = None
 tun_process = None
 tun_enabled = False
@@ -695,7 +695,7 @@ def on_enter_key(event):
 
 root.bind('<Return>', on_enter_key)
 
-root.title(APP_NAME+" "+APP_VERS)
+root.title(APP_NAME+" "+APP_VERS+" "+XRAY_VERS)
 
 root.configure(bg="#e8e8e8")
 
