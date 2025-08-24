@@ -13,13 +13,17 @@ import winreg
 import re
 import socket
 import ctypes
+import webbrowser
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.63-beta"
+APP_VERS = "v0.64-beta"
 XRAY_VERS = "v25.8.3"
 xray_process = None
 tun_process = None
 tun_enabled = False
+
+def open_link(event):
+    webbrowser.open_new("https://t.me/SkyBridge_VPN_bot")
 
 active_tag = None
 proxy_enabled = False
@@ -1001,6 +1005,20 @@ def vrv_tun_mode_toggle():
 btn_tun = tk.Button(frame, text="Включить TUN", font=("Arial", 12), command=vrv_tun_mode_toggle)
 tooltip = ToolTip(btn_tun, "Только от имени Администратора! Ожидание 30 сек.")
 btn_tun.pack(side=tk.RIGHT, pady=3)
+
+# Создаём "ссылку" внизу
+link = tk.Label(
+    root,
+    text="Наш Telegram бот",
+    fg="#000",
+    cursor="hand2",
+    font=("Arial", 10, "underline")
+)
+link.pack(side="bottom", pady=5)
+
+# Привязываем обработчик
+link.bind("<Button-1>", open_link)
+
 
 load_base64_urls()
 load_state()
