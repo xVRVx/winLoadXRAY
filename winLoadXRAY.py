@@ -16,14 +16,53 @@ import ctypes
 import webbrowser
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.64-beta"
-XRAY_VERS = "v25.8.3"
+APP_VERS = "v0.65-beta"
+XRAY_VERS = "v25.10.15"
 xray_process = None
 tun_process = None
 tun_enabled = False
 
+# --- Функция для проверки последней версии на GitHub ---
+def check_latest_version():
+    try:
+        # Получаем информацию о последнем релизе
+        response = requests.get("https://api.github.com/repos/xVRVx/winLoadXRAY/releases/latest", timeout=10)
+        response.raise_for_status()
+        latest_release = response.json()
+        latest_version = latest_release.get("tag_name", "")
+        
+        # Сравниваем версии
+        if latest_version and latest_version != APP_VERS:
+            # Показываем красную ссылку для скачивания
+            show_update_link(latest_version)
+    except Exception as e:
+        print(f"Ошибка при проверке версии: {e}")
+
+def show_update_link(latest_version):
+  
+    update_link = tk.Label(
+        frameBot,
+        text=f"Доступна: {latest_version}",
+        fg="#2f97d3",
+        bg="#e8e8e8",
+        cursor="hand2",
+        font=("Arial", 10, "underline")
+    )
+    update_link.pack(side="right", padx=(0, 20), pady=5)  # Добавляем отступ справа
+
+    # Обработчик клика по ссылке
+    def download_update(event):
+        webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/releases/")
+        # webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/releases/latest/download/winLoadXRAY.exe")
+    
+    update_link.bind("<Button-1>", download_update)
+
+
 def open_link(event):
     webbrowser.open_new("https://t.me/SkyBridge_VPN_bot")
+
+def github(event):
+    webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/")
 
 active_tag = None
 proxy_enabled = False
@@ -712,7 +751,7 @@ frame.pack(padx=10, pady=5)
 entry = tk.Entry(frame, width=35, bg="#fff", fg="#000", insertbackground="#ffffff", font=("Arial", 12))
 entry.pack(side="left", padx=10, pady=0, ipady=3)
 
-tooltip = ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
+ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
 
 # вставка из буфера обмена
 # def add_from_clipboard_and_parse():
@@ -734,7 +773,7 @@ icon = ImageTk.PhotoImage(img)
 btnBuffer = tk.Button(frame, image=icon, command=add_from_url, bg="#d1efff")
 btnBuffer.pack(side="right", pady=3)
 
-tooltip = ToolTip(btnBuffer, "Обновить подписку")
+ToolTip(btnBuffer, "Обновить подписку")
 
 
 
@@ -757,10 +796,10 @@ frame = tk.Frame(root)
 frame.pack(padx=10, pady=5)
 btn_run = tk.Button(frame, text="Запустить конфиг", font=("Arial", 12), command=run_selected)
 btn_run.pack(side=tk.LEFT, pady=3)
-tooltip = ToolTip(btn_run, "socks5 на 2080 порту")
+ToolTip(btn_run, "socks5 на 2080 порту")
 
 btn_proxy = tk.Button(frame, text="Включить системный прокси", font=("Arial", 12), command=toggle_system_proxy)
-tooltip = ToolTip(btn_proxy, "Запустите конфиг и выключите другие прокси расширения.")
+ToolTip(btn_proxy, "Запустите конфиг и выключите другие прокси расширения.\nРаботает только для браузеров.")
 
 btn_proxy.pack(side=tk.RIGHT, pady=3)
 #tk.Button(root, text="Остановить Xray", command=stop_xray, bg="#ffcccc").pack(pady=3)
@@ -831,10 +870,11 @@ def get_default_interface():
     }
     """
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps_command],
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_command],
         capture_output=True,
         text=True,
-        encoding="utf-8"
+        encoding="utf-8",
+        creationflags=CREATE_NO_WINDOW
     )
     return result.stdout.strip()
     
@@ -917,7 +957,7 @@ def start_tun2proxy():
         resource_path("tun2proxy/tun2proxy-bin.exe"),
         "--proxy", "socks5://127.0.0.1:2080"
     ]
-    tun_process = subprocess.Popen(cmd)
+    tun_process = subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
     print(f"tun2proxy запущен с PID {tun_process.pid}")
 
 
@@ -1003,26 +1043,46 @@ def vrv_tun_mode_toggle():
 
     
 btn_tun = tk.Button(frame, text="Включить TUN", font=("Arial", 12), command=vrv_tun_mode_toggle)
-tooltip = ToolTip(btn_tun, "Только от имени Администратора! Ожидание 30 сек.")
+ToolTip(btn_tun, "Только от имени Администратора! Ожидание VPN 30 сек!\nСоздается виртуальная сетевая карта.")
 btn_tun.pack(side=tk.RIGHT, pady=3)
 
+
+frameBot = tk.Frame(root)
+frameBot.pack(padx=10, pady=2)
+
 # Создаём "ссылку" внизу
-link = tk.Label(
-    root,
+link1 = tk.Label(
+    frameBot,
     text="Наш Telegram бот",
     fg="#000",
     cursor="hand2",
     font=("Arial", 10, "underline")
 )
-link.pack(side="bottom", pady=5)
+link1.pack(side="left", pady=5)
 
 # Привязываем обработчик
-link.bind("<Button-1>", open_link)
+link1.bind("<Button-1>", open_link)
+
+# Создаём "ссылку" внизу
+link2 = tk.Label(
+    frameBot,
+    text="GitHub",
+    fg="#000",
+    cursor="hand2",
+    font=("Arial", 10, "underline")
+)
+link2.pack(side="left", pady=5)
+
+# Привязываем обработчик
+link2.bind("<Button-1>", github)
+
+# Здесь будет появляться ссылка на обновление при проверке версии
 
 
 load_base64_urls()
 load_state()
 
+root.after(3000, check_latest_version)  # Проверка через 2 секунды после запуска
 
 def on_closing():
     save_state()
