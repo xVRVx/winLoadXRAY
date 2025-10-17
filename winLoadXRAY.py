@@ -48,6 +48,8 @@ def show_update_link(latest_version):
         cursor="hand2",
         font=("Arial", 10, "underline")
     )
+    ToolTip(update_link, "Замените: "+ get_executable_path())
+    
     update_link.pack(side="right", padx=(0, 20), pady=5)  # Добавляем отступ справа
 
     # Обработчик клика по ссылке
