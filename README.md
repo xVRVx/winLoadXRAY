@@ -16,7 +16,8 @@ VPN приложение для vless tcp reality и голых конфигов
 
 ## Внимание! Предустановлен роутинг для ru зоны, ru сайты в direct.
 
-**Запустить:**
+**Запуск**
+
 Зависимости: pip install pillow requests 
 
 Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
