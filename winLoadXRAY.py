@@ -16,7 +16,7 @@ import ctypes
 import webbrowser
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.65-beta"
+APP_VERS = "v0.66-beta"
 XRAY_VERS = "v25.10.15"
 xray_process = None
 tun_process = None
@@ -227,14 +227,16 @@ def parse_vless(url):
         "uuid": uuid,
         "address": address,
         "port": port,
-        "security": params.get("security", ["tls"])[0],
-        "network": params.get("type", ["tcp"])[0],
-        "flow": params.get("flow", [""])[0],
+        "security": params.get("security", ["reality"])[0],
+        "network": params.get("type", ["raw"])[0],
+        "flow": params.get("flow", ["xtls-rprx-vision"])[0],
         "sni": params.get("sni", [""])[0],
         "pbk": params.get("pbk", [""])[0],
-        "fp": params.get("fp", [""])[0],
+        "fp": params.get("fp", ["chrome"])[0],
         "sid": params.get("sid", [""])[0],
         "path": params.get("path", [""])[0],
+        "spx": params.get("spx", ["/"])[0],
+        "pqv": params.get("pqv", [""])[0],
         "tag": tag
     }
 
@@ -396,10 +398,12 @@ def generate_config(data):
         })
         if data["security"] == "reality":
             config["outbounds"][0]["streamSettings"]["realitySettings"] = {
+                "fingerprint": data["fp"],
                 "serverName": data["sni"],
-                "publicKey": data["pbk"],
+                "password": data["pbk"],
                 "shortId": data["sid"],
-                "fingerprint": data["fp"]
+                "mldsa65Verify": data["pqv"],
+                "spiderX": data["spx"]
             }
         if data["network"] == "xhttp":
             config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto"}
