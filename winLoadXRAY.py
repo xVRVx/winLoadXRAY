@@ -16,7 +16,7 @@ import ctypes
 import webbrowser
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.66-beta"
+APP_VERS = "v0.67-beta"
 XRAY_VERS = "v25.10.15"
 xray_process = None
 tun_process = None
@@ -493,7 +493,9 @@ def add_from_url():
 
     if input_text.startswith("https"):
         try:
-            r = requests.get(input_text)
+            headers = {'User-Agent': f'{APP_NAME}/{APP_VERS}'}
+            r = requests.get(input_text, headers=headers)
+            # r = requests.get(input_text)
             r.raise_for_status()
 
             try:
