@@ -8,18 +8,22 @@ import sys
 import os
 import shutil
 import subprocess
-from urllib.parse import urlparse, parse_qs, unquote
 import winreg
 import re
-import socket
 import ctypes
 import webbrowser
 
+sys.path.append(os.path.join(os.path.dirname(__file__), 'func'))
+from parsing import parse_vless, parse_shadowsocks
+from configXray import generate_config
+from tun2proxy import get_default_interface, patch_direct_out_interface, start_tun2proxy, stop_tun2proxy
+from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
+
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.67-beta"
+APP_VERS = "v0.71-beta"
 XRAY_VERS = "v25.10.15"
+
 xray_process = None
-tun_process = None
 tun_enabled = False
 
 # --- Функция для проверки последней версии на GitHub ---
@@ -178,26 +182,7 @@ def load_base64_urls():
             # listbox.select_set(0)
 
 
-# --- Функция подсветки активного тега: ---
-def highlight_active(tag):
-    global active_tag
 
-    # Сброс цвета у старого
-    if active_tag is not None:
-        try:
-            idx = listbox.get(0, tk.END).index(active_tag)
-            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
-        except ValueError:
-            pass
-
-    # Новый активный
-    try:
-        idx = listbox.get(0, tk.END).index(tag)
-        listbox.itemconfig(idx, {'bg': 'lightgreen', 'fg': 'black'})
-        active_tag = tag
-        save_state()
-    except ValueError:
-        active_tag = None
 
 
 
@@ -205,216 +190,7 @@ def highlight_active(tag):
 if not os.path.exists(CONFIGS_DIR):
     os.makedirs(CONFIGS_DIR)
 
-def sanitize_filename(name):
-    # Удаляем недопустимые символы для имени файла в Windows
-    return re.sub(r'[<>:"/\\|?*]', '_', name)
-
 configs = {}
-
-# --- Парсинг VLESS-ссылки ---
-def parse_vless(url):
-    parsed = urlparse(url)
-    uuid = parsed.username
-    address = parsed.hostname
-    port = int(parsed.port)
-    params = parse_qs(parsed.query)
-    tag = parsed.fragment or f"{address}:{port}"
-    tag = unquote(tag)  # Декодируем emoji и кириллицу
-    tag = sanitize_filename(tag)
-
-    return {
-        "protocol": "vless",
-        "uuid": uuid,
-        "address": address,
-        "port": port,
-        "security": params.get("security", ["reality"])[0],
-        "network": params.get("type", ["raw"])[0],
-        "flow": params.get("flow", ["xtls-rprx-vision"])[0],
-        "sni": params.get("sni", [""])[0],
-        "pbk": params.get("pbk", [""])[0],
-        "fp": params.get("fp", ["chrome"])[0],
-        "sid": params.get("sid", [""])[0],
-        "path": params.get("path", [""])[0],
-        "spx": params.get("spx", ["/"])[0],
-        "pqv": params.get("pqv", [""])[0],
-        "tag": tag
-    }
-
-# --- Парсинг SS-ссылки ---
-def parse_shadowsocks(url):
-    assert url.startswith("ss://")
-    url = url[5:]
-
-    if "#" in url:
-        url, tag = url.split("#", 1)
-        tag = unquote(tag)
-    else:
-        tag = "ss_config"
-
-    if "@" in url:
-        base64_part, address_part = url.split("@", 1)
-        padded = base64_part + '=' * (-len(base64_part) % 4)
-        decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
-        method, password = decoded.split(":", 1)
-        server, port = address_part.split(":")
-    else:
-        raise ValueError("Некорректный формат Shadowsocks ссылки")
-
-    return {
-        "protocol": "shadowsocks",
-        "tag": tag,
-        "server": server,
-        "port": int(port),
-        "method": method,
-        "password": password
-    }
-
-# --- Генерация конфигурации XRAY ---
-def generate_config(data):
-    config = {
-        "dns": {
-            "servers": [
-                "8.8.4.4",
-                "8.8.8.8",
-                "1.1.1.1",
-                "localhost"
-            ]
-        },
-        "log": {"loglevel": "warning"},
-        "routing": {
-            "domainStrategy": "IPIfNonMatch",
-            "rules": [
-                {
-                    "domain": [
-                        "geosite:category-ads",
-                        "geosite:win-spy"
-                    ],
-                    "outboundTag": "block"
-                },
-                {
-                    "protocol": [
-                        "bittorrent"
-                    ],
-                    "outboundTag": "direct"
-                },
-                {
-                    "domain": [
-                        "geosite:private",
-                        "geosite:apple",
-                        "geosite:apple-pki",
-                        "geosite:huawei",
-                        "geosite:xiaomi",
-                        "geosite:category-android-app-download",
-                        "geosite:f-droid",
-                        "geosite:yandex",
-                        "geosite:vk",
-                        "geosite:microsoft",
-                        "geosite:win-update",
-                        "geosite:win-extra",
-                        "geosite:google-play",
-                        "geosite:steam",
-                        "geosite:category-ru"
-                    ],
-                    "outboundTag": "direct"
-                },
-                {
-                    "ip": [
-                        "geoip:private"                        
-                    ],
-                    "outboundTag": "direct"
-                },
-                {
-                    "ip": [
-                        "geoip:!ru"
-                    ],
-                    "outboundTag": "proxy"
-                },
-                {
-                    "domain": [
-                        "geosite:discord",
-                        "geosite:youtube",
-                        "geosite:tiktok",
-                        "geosite:twitch",
-                        "geosite:signal"
-
-                    ],
-                    "outboundTag": "proxy"
-                }
-            ]
-    },
-        "inbounds": [
-            {
-                "tag": "socks-sb",
-                "protocol": "socks",
-                "listen": "127.0.0.1",
-                "port": 2080,
-                "settings": {
-                    "udp": True
-                }
-            }
-        ],
-        "outbounds": []
-    }
-
-    if data["protocol"] == "shadowsocks":
-        config["outbounds"].append({
-            "protocol": "shadowsocks",
-            "tag": "proxy",
-            "settings": {
-                "servers": [
-                    {
-                        "address": data["server"],
-                        "port": data["port"],
-                        "method": data["method"],
-                        "password": data["password"]
-                    }
-                ]
-            }
-        })
-    else:  # VLESS
-        config["outbounds"].append({
-            "tag": "proxy",
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": data["address"],
-                        "port": data["port"],
-                        "users": [
-                            {
-                                "id": data["uuid"],
-                                "encryption": "none",
-                                "flow": data["flow"],
-                                "level": 0
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": data["network"],
-                "security": data["security"]
-            }
-        })
-        if data["security"] == "reality":
-            config["outbounds"][0]["streamSettings"]["realitySettings"] = {
-                "fingerprint": data["fp"],
-                "serverName": data["sni"],
-                "password": data["pbk"],
-                "shortId": data["sid"],
-                "mldsa65Verify": data["pqv"],
-                "spiderX": data["spx"]
-            }
-        if data["network"] == "xhttp":
-            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto"}
-
-    # Общие outbounds
-    config["outbounds"].extend([
-        {"protocol": "freedom", "tag": "direct"},
-        {"protocol": "blackhole", "tag": "block"}
-    ])
-
-    return json.dumps(config, indent=2)
 
 
 
@@ -584,17 +360,6 @@ def run_selected():
         messagebox.showerror("Ошибка", f"Не удалось запустить Xray: {e}")
 
 
-def clear_highlight():
-    global active_tag
-    if active_tag is not None:
-        try:
-            idx = listbox.get(0, tk.END).index(active_tag)
-            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
-        except ValueError:
-            pass
-        active_tag = None
-
-
 # --- кнопка стоп
 def stop_xray():
     global xray_process
@@ -624,6 +389,37 @@ def stop_system_proxy():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось отключить прокси: {e}")
 
+# --- Функция подсветки активного тега: ---
+def highlight_active(tag):
+    global active_tag
+
+    # Сброс цвета у старого
+    if active_tag is not None:
+        try:
+            idx = listbox.get(0, tk.END).index(active_tag)
+            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
+        except ValueError:
+            pass
+
+    # Новый активный
+    try:
+        idx = listbox.get(0, tk.END).index(tag)
+        listbox.itemconfig(idx, {'bg': 'lightgreen', 'fg': 'black'})
+        active_tag = tag
+        save_state()
+    except ValueError:
+        active_tag = None
+
+def clear_highlight():
+    global active_tag
+    if active_tag is not None:
+        try:
+            idx = listbox.get(0, tk.END).index(active_tag)
+            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
+        except ValueError:
+            pass
+        active_tag = None
+
 #подсказка при наведении
 class ToolTip:
     def __init__(self, widget, text):
@@ -650,51 +446,121 @@ class ToolTip:
             self.tipwindow.destroy()
             self.tipwindow = None
 
-def cmd_copy():
-    widget = root.focus_get()
-    try:
-        # Копируем выделенный текст в буфер обмена
-        selected_text = widget.selection_get()
-        root.clipboard_clear()
-        root.clipboard_append(selected_text)
-    except:
-        pass  # Нет выделения, ничего не делаем
 
+def get_executable_path():
+    return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
 
-def cmd_paste():
-    widget = root.focus_get()
+def is_in_startup(app_name=APP_NAME):
     try:
-        clipboard_text = root.clipboard_get()
-        # Очистить поле (для Entry и Text по-разному)
-        if isinstance(widget, tk.Entry) or isinstance(widget, tk.Text):
-            widget.delete("1.0", tk.END) if isinstance(widget, tk.Text) else widget.delete(0, tk.END)
-            widget.insert("1.0" if isinstance(widget, tk.Text) else 0, clipboard_text)
-    except:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_READ
+        )
+        value, _ = winreg.QueryValueEx(key, app_name)
+        winreg.CloseKey(key)
+        return os.path.abspath(value) == get_executable_path()
+    except FileNotFoundError:
+        return False
+
+def add_to_startup(app_name=APP_NAME, path=None):
+    if path is None:
+        path = get_executable_path()
+    key = winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Run",
+        0, winreg.KEY_SET_VALUE
+    )
+    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, path)
+    winreg.CloseKey(key)
+
+def remove_from_startup(app_name=APP_NAME):
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE
+        )
+        winreg.DeleteValue(key, app_name)
+        winreg.CloseKey(key)
+    except FileNotFoundError:
         pass
-    stop_xray()    
-    add_from_url()
 
-def cmd_cut():
-    widget = root.focus_get()
+# ---- Tkinter UI ----
+def toggle_startup():
+    if startup_var.get():
+        add_to_startup()
+    else:
+        remove_from_startup()
+
+def restart_xray_with_active():
+    global xray_process
+    if not active_tag:
+        print("Нет активного тега для перезапуска.")
+        return
+
+    config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
+    if not os.path.exists(config_path):
+        print(f"Конфиг не найден: {config_path}")
+        return
+
     try:
-        # Вырезаем выделенный текст: копируем и удаляем из виджета
-        selected_text = widget.selection_get()
-        root.clipboard_clear()
-        root.clipboard_append(selected_text)
-        widget.delete("sel.first", "sel.last")
-    except:
-        pass  # Нет выделения, ничего не делаем         
+        xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
+        highlight_active(active_tag)
+        btn_run.config(text="Остановить конфиг", bg="lightgreen")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось перезапустить Xray: {e}")
 
-def cmd_select_all():
-    widget = root.focus_get()
-    # Для Text
-    if isinstance(widget, Text):
-        widget.tag_add("sel", "1.0", "end")
-    # Для Entry
-    elif isinstance(widget, Entry):
-        widget.select_range(0, "end")
-        widget.icursor("end")
-            
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    script = get_executable_path()
+    params = ""  # можно передать аргументы, если нужно
+    try:
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", script, params, None, 1
+        )
+        save_state()
+        stop_xray()
+        stop_system_proxy()
+        sys.exit()  # завершить текущий процесс
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось получить права администратора: {e}")
+
+ 
+def vrv_tun_mode_toggle():
+    global tun_enabled, active_tag
+
+    if not is_admin():
+        # answer = messagebox.askyesno("Требуются права", "Нужно запустить с правами администратора. Перезапустить?")
+        # if answer:
+            run_as_admin()
+        # return
+
+    if not tun_enabled:
+        # ВКЛ
+        interface = get_default_interface()
+        patch_direct_out_interface(CONFIGS_DIR, interface)
+
+        saved_tag = active_tag
+        stop_xray()
+        if saved_tag:
+            active_tag = saved_tag
+            restart_xray_with_active()
+           
+        start_tun2proxy(resource_path("tun2proxy/tun2proxy-bin.exe"))
+        btn_tun.config(text="Выключить TUN", bg="#ffcccc")
+        tun_enabled = True
+    else:
+        # ВЫКЛ
+        stop_tun2proxy()
+        btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
+        tun_enabled = False
+
 
 # --- Интерфейс ---
 root = tk.Tk()
@@ -710,13 +576,13 @@ root.minsize(400, 280)
 
 def keypress(e):
     if e.keycode == 86:
-        cmd_paste()
+        cmd_paste(root, stop_xray, add_from_url)
     elif e.keycode == 67:
-        cmd_copy()
+        cmd_copy(root)
     elif e.keycode == 88:
-        cmd_cut()
+        cmd_cut(root)
     elif e.keycode == 65:
-        cmd_select_all()
+        cmd_select_all(root)
 root.bind("<Control-KeyPress>", keypress)
 
 def select_config():
@@ -813,51 +679,6 @@ btn_proxy.pack(side=tk.RIGHT, pady=3)
 #tk.Button(root, text="Остановить Xray", command=stop_xray, bg="#ffcccc").pack(pady=3)
 
 
-def get_executable_path():
-    return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
-
-def is_in_startup(app_name=APP_NAME):
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0, winreg.KEY_READ
-        )
-        value, _ = winreg.QueryValueEx(key, app_name)
-        winreg.CloseKey(key)
-        return os.path.abspath(value) == get_executable_path()
-    except FileNotFoundError:
-        return False
-
-def add_to_startup(app_name=APP_NAME, path=None):
-    if path is None:
-        path = get_executable_path()
-    key = winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER,
-        r"Software\Microsoft\Windows\CurrentVersion\Run",
-        0, winreg.KEY_SET_VALUE
-    )
-    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, path)
-    winreg.CloseKey(key)
-
-def remove_from_startup(app_name=APP_NAME):
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0, winreg.KEY_SET_VALUE
-        )
-        winreg.DeleteValue(key, app_name)
-        winreg.CloseKey(key)
-    except FileNotFoundError:
-        pass
-
-# ---- Tkinter UI ----
-def toggle_startup():
-    if startup_var.get():
-        add_to_startup()
-    else:
-        remove_from_startup()
         
 frame = tk.Frame(root)
 frame.pack(padx=10, pady=5)
@@ -865,188 +686,6 @@ frame.pack(padx=10, pady=5)
 startup_var = tk.BooleanVar(value=is_in_startup())
 startup_check = tk.Checkbutton(frame, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
 startup_check.pack(side=tk.LEFT, pady=4, padx=14)
-
-def get_default_interface():
-    ps_command = r"""
-    $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1
-    $iface = Get-NetIPInterface | Where-Object { $_.InterfaceIndex -eq $route.InterfaceIndex }
-    if ($iface -is [array]) {
-        $iface[0].InterfaceAlias
-    } else {
-        $iface.InterfaceAlias
-    }
-    """
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_command],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        creationflags=CREATE_NO_WINDOW
-    )
-    return result.stdout.strip()
-    
-    
-def resolve_ips_from_url(url):
-    try:
-        info = socket.getaddrinfo(url, None)
-        return list(set(item[4][0] for item in info))
-    except socket.gaierror as e:
-        print(f"[!] Не удалось определить IP для {url}: {e}")
-        return []    
-    
-def patch_direct_out_interface(config_dir, interface_name):
-    for filename in os.listdir(config_dir):
-        if filename.endswith(".json") and filename not in ("links.json", "state.json"):
-            filepath = os.path.join(config_dir, filename)
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-
-                modified = False
-                resolved_ips = []
-
-                # Обработка outbounds — назначаем интерфейс и собираем адреса для резолва
-                if isinstance(config.get("outbounds"), list):
-                    for outbound in config["outbounds"]:
-                        if outbound.get("tag") == "direct" and outbound.get("protocol") == "freedom":
-                            outbound["streamSettings"] = {
-                                "sockopt": {
-                                    "interface": interface_name
-                                }
-                            }
-                            modified = True
-
-                        # Получаем URL из настроек, если есть
-                        if "settings" in outbound and isinstance(outbound["settings"], dict):
-                            vnext_list = outbound["settings"].get("vnext")
-                            if isinstance(vnext_list, list):
-                                for vnext in vnext_list:
-                                    address = vnext.get("address")
-                                    if address and not address.replace('.', '').isdigit():
-                                        ips = resolve_ips_from_url(address)
-                                        if ips:
-                                            resolved_ips.extend(ips)
-                                    print("Привет, ip получены!")
-
-                # Удаляем дубликаты IP
-                resolved_ips = list(set(resolved_ips))
-
-                # Вставляем правило в начало routing.rules
-                if resolved_ips:
-                    rule = {
-                        "ip": resolved_ips,
-                        "outboundTag": "direct"
-                    }
-
-                    if "routing" not in config:
-                        config["routing"] = {"rules": []}
-                    if "rules" not in config["routing"]:
-                        config["routing"]["rules"] = []
-
-                    config["routing"]["rules"].insert(0, rule)
-                    modified = True
-
-                if modified:
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        json.dump(config, f, indent=2, ensure_ascii=False)
-                    print(f"[✓] Обновлён файл: {filename}")
-                else:
-                    print(f"[ ] Пропущен (без изменений): {filename}")
-
-            except Exception as e:
-                print(f"[!] Ошибка в файле {filename}: {e}")
-                
-                
-
-def start_tun2proxy():
-    global tun_process
-    cmd = [
-        resource_path("tun2proxy/tun2proxy-bin.exe"),
-        "--proxy", "socks5://127.0.0.1:2080"
-    ]
-    tun_process = subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
-    print(f"tun2proxy запущен с PID {tun_process.pid}")
-
-
-def stop_tun2proxy():
-    global tun_process
-    if tun_process and tun_process.poll() is None:
-        tun_process.terminate()
-        tun_process.wait()
-        print("tun2proxy остановлен")
-    tun_process = None
-
- 
-def restart_xray_with_active():
-    global xray_process
-    if not active_tag:
-        print("Нет активного тега для перезапуска.")
-        return
-
-    config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
-    if not os.path.exists(config_path):
-        print(f"Конфиг не найден: {config_path}")
-        return
-
-    try:
-        xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
-        highlight_active(active_tag)
-        btn_run.config(text="Остановить конфиг", bg="lightgreen")
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось перезапустить Xray: {e}")
-
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
-def run_as_admin():
-    script = get_executable_path()
-    params = ""  # можно передать аргументы, если нужно
-    try:
-        ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", script, params, None, 1
-        )
-        save_state()
-        stop_xray()
-        stop_system_proxy()
-        sys.exit()  # завершить текущий процесс
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось получить права администратора: {e}")
-
- 
-def vrv_tun_mode_toggle():
-    global tun_enabled, active_tag
-
-    if not is_admin():
-        # answer = messagebox.askyesno("Требуются права", "Нужно запустить с правами администратора. Перезапустить?")
-        # if answer:
-            run_as_admin()
-        # return
-
-    if not tun_enabled:
-        # ВКЛ
-        interface = get_default_interface()
-        patch_direct_out_interface(CONFIGS_DIR, interface)
-
-        saved_tag = active_tag
-        stop_xray()
-        if saved_tag:
-            active_tag = saved_tag
-            restart_xray_with_active()
-           
-        start_tun2proxy()
-        btn_tun.config(text="Выключить TUN", bg="#ffcccc")
-        tun_enabled = True
-    else:
-        # ВЫКЛ
-        stop_tun2proxy()
-        btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
-        tun_enabled = False
-
-
 
 
     
