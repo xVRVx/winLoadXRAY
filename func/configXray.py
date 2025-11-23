@@ -130,7 +130,7 @@ def generate_config(data):
                 ]
             },
             "streamSettings": {
-                "network": "raw",
+                "network": data["network"],
                 "security": data["security"]
             }
         })
