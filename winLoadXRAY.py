@@ -20,7 +20,7 @@ from tun2proxy import get_default_interface, patch_direct_out_interface, start_t
 from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.72-beta"
+APP_VERS = "v0.73-beta"
 XRAY_VERS = "v25.10.15"
 
 xray_process = None
