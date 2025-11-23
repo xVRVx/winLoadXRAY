@@ -24,7 +24,7 @@ def parse_vless(url):
         "port": port,
         "security": params.get("security", ["reality"])[0],
         "network": params.get("type", ["raw"])[0],
-        "flow": params.get("flow", ["xtls-rprx-vision"])[0],
+        "flow": params.get("flow", [""])[0],
         "sni": params.get("sni", [""])[0],
         "pbk": params.get("pbk", [""])[0],
         "fp": params.get("fp", ["chrome"])[0],
