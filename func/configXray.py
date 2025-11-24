@@ -144,7 +144,7 @@ def generate_config(data):
                 "spiderX": data["spx"]
             }
         if data["network"] == "xhttp":
-            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto"}
+            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto","path": data["path"]}
 
     # Общие outbounds
     config["outbounds"].extend([
