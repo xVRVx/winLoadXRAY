@@ -12,6 +12,7 @@ import winreg
 import re
 import ctypes
 import webbrowser
+from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'func'))
 from parsing import parse_vless, parse_shadowsocks
@@ -20,7 +21,7 @@ from tun2proxy import get_default_interface, patch_direct_out_interface, start_t
 from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.74-beta"
+APP_VERS = "v0.82-beta"
 XRAY_VERS = "v25.10.15"
 
 xray_process = None
@@ -301,19 +302,45 @@ def add_from_url():
 
             except Exception:
                 # Если base64 не прокатил — пытаемся загрузить как чистый JSON (с очисткой html)
-                import re
                 clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
+                
                 try:
-                    config_data = json.loads(clean_content)
-                    tag = config_data.get("tag", "default_config")
-                    configs[tag] = config_data
-                    listbox.insert(tk.END, tag)
-                    with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as cf:
-                        json.dump(config_data, cf, indent=2, ensure_ascii=False)
-                    base64_urls.append(input_text)
-                    save_base64_urls()
-                    messagebox.showinfo("Добавлено", "Добавлен конфиг из JSON.")
-                    return
+                    loaded_data = json.loads(clean_content)
+                    
+                    # Приводим к списку, даже если прилетел один объект
+                    if isinstance(loaded_data, list):
+                        items = loaded_data
+                    elif isinstance(loaded_data, dict):
+                        items = [loaded_data]
+                    else:
+                        raise ValueError("Полученные данные не являются JSON объектом или списком")
+
+                    added_count = 0
+                    
+                    for config_data in items:
+                        # Пытаемся найти имя для конфига:
+                        # 1. Сначала поле "remarks" (оно есть в вашем файле примера)
+                        # 2. Если нет, поле "tag"
+                        # 3. Если нет, генерируем случайное имя
+                        tag = unquote(config_data.get("remarks", config_data.get("tag", f"import_json_{added_count}")))
+                        tag = sanitize_filename(tag)  # Декодируем emoji и кириллицу
+
+                        configs[tag] = config_data
+                        listbox.insert(tk.END, tag)
+                        
+                        with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as cf:
+                            json.dump(config_data, cf, indent=2, ensure_ascii=False)
+                        
+                        added_count += 1
+
+                    if added_count > 0:
+                        base64_urls.append(input_text)
+                        save_base64_urls()
+                        messagebox.showinfo("Добавлено", f"Добавлено конфигов из JSON: {added_count}")
+                        return
+                    else:
+                         messagebox.showwarning("Внимание", "JSON был валидным, но пуст.")
+
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось распарсить JSON конфиг: {e}")
                     return
@@ -328,6 +355,9 @@ def add_from_url():
 
     messagebox.showerror("Ошибка", "Введите корректную VLESS ссылку или URL на base64 с конфигами.")
 
+def sanitize_filename(name):
+    # Удаляем недопустимые символы для имени файла в Windows
+    return re.sub(r'[<>:"/\\|?*]', '_', name)
 
 
 # --- Запуск Xray ---
