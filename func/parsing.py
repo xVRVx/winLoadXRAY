@@ -24,13 +24,19 @@ def parse_vless(url):
         "port": port,
         "security": params.get("security", ["reality"])[0],
         "network": params.get("type", ["raw"])[0],
+        "headerType": params.get("headerType", [""])[0],
+        "path": params.get("path", [""])[0],
+        "host": params.get("host", [""])[0],
         "flow": params.get("flow", [""])[0],
         "sni": params.get("sni", [""])[0],
-        "pbk": params.get("pbk", [""])[0],
         "fp": params.get("fp", ["chrome"])[0],
+        "pbk": params.get("pbk", [""])[0],
         "sid": params.get("sid", [""])[0],
-        "path": params.get("path", [""])[0],
         "spx": params.get("spx", ["/"])[0],
+
+            "extra": params.get("extra", [""])[0],
+            "mode": params.get("mode", ["auto"])[0],
+
         "pqv": params.get("pqv", [""])[0],
         "tag": tag
     }

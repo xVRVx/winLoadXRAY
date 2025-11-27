@@ -2,6 +2,7 @@ import json
 # --- Генерация конфигурации XRAY ---
 def generate_config(data):
     config = {
+        "log": {"loglevel": "warning"},
         "dns": {
             "servers": [
                 "https://8.8.4.4/dns-query",
@@ -18,7 +19,6 @@ def generate_config(data):
                 # "localhost"
             ]
         },
-        "log": {"loglevel": "warning"},
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
@@ -122,8 +122,7 @@ def generate_config(data):
                             {
                                 "id": data["uuid"],
                                 "encryption": "none",
-                                "flow": data["flow"],
-                                "level": 0
+                                "flow": data["flow"]
                             }
                         ]
                     }
@@ -144,7 +143,22 @@ def generate_config(data):
                 "spiderX": data["spx"]
             }
         if data["network"] == "xhttp":
-            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {"mode": "auto","path": data["path"]}
+            config["outbounds"][0]["streamSettings"]["xhttpSettings"] = {
+                "host": data["host"],
+                "mode": data["mode"],
+                "path": data["path"],
+                "scMaxConcurrentPosts": 10,
+                "scMaxEachPostBytes": 1000000,
+                "scMinPostsIntervalMs": 30
+            }
+            if data.get("extra"):
+                try:
+                    # Пытаемся превратить строку в объект и сразу присвоить
+                    extra_obj = json.loads(data["extra"])
+                    config["outbounds"][0]["streamSettings"]["xhttpSettings"]["extra"] = extra_obj
+                except Exception:
+                    # Если ошибка парсинга JSON — просто пропускаем, "extra" не добавится
+                    pass
 
     # Общие outbounds
     config["outbounds"].extend([
