@@ -21,8 +21,8 @@ from tun2proxy import get_default_interface, patch_direct_out_interface, start_t
 from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.82-beta"
-XRAY_VERS = "v25.10.15"
+APP_VERS = "v0.83-beta"
+XRAY_VERS = "v25.12.8"
 
 xray_process = None
 tun_enabled = False
