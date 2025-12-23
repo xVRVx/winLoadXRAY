@@ -60,23 +60,6 @@ def generate_config(data):
                         "geoip:private"                        
                     ],
                     "outboundTag": "direct"
-                },
-                {
-                    "ip": [
-                        "geoip:!ru"
-                    ],
-                    "outboundTag": "proxy"
-                },
-                {
-                    "domain": [
-                        "geosite:discord",
-                        "geosite:youtube",
-                        "geosite:tiktok",
-                        "geosite:twitch",
-                        "geosite:signal"
-
-                    ],
-                    "outboundTag": "proxy"
                 }
             ]
     },
@@ -88,6 +71,14 @@ def generate_config(data):
                 "port": 2080,
                 "settings": {
                     "udp": True
+                },
+                "sniffing": {
+                "enabled": True,
+                "destOverride": [
+                    "http",
+                    "tls",
+                    "quic"
+                ]
                 }
             }
         ],
