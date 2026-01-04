@@ -36,6 +36,12 @@ def generate_config(data):
                     "outboundTag": "direct"
                 },
                 {
+                "domain": [
+                    "habr.com"
+                ],
+                "outboundTag": "proxy"
+                },
+                {
                     "domain": [
                         "geosite:private",
                         "geosite:apple",
