@@ -21,11 +21,13 @@ from tun2proxy import get_default_interface, patch_direct_out_interface, start_t
 from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.83-beta"
+APP_VERS = "v0.84-beta"
 XRAY_VERS = "v25.12.8"
 
 xray_process = None
 tun_enabled = False
+
+IS_AUTOSTART = "--autostart" in sys.argv
 
 # --- Функция для проверки последней версии на GitHub ---
 def check_latest_version():
@@ -215,18 +217,11 @@ def toggle_system_proxy(host="127.0.0.1", port=2080):
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось переключить прокси: {e}")
 
-
-def add_from_url():
-    global base64_urls
-    stop_xray()
-    stop_system_proxy()
-    input_text = entry.get().strip()
-
+def clear_xray_configs():
     # Очистка старых данных
     configs.clear()
     listbox.delete(0, tk.END)
-    base64_urls = []
-
+    
     # Удаляем все json-файлы из папки CONFIGS_DIR
     for filename in os.listdir(CONFIGS_DIR):
         if filename.endswith(".json"):
@@ -235,7 +230,15 @@ def add_from_url():
             except Exception as e:
                 print(f"Не удалось удалить файл {filename}: {e}")
 
+def add_from_url():
+    global base64_urls
+    stop_xray()
+    stop_system_proxy()
+    input_text = entry.get().strip()
+
     if input_text.startswith("vless://"):
+        clear_xray_configs()
+        base64_urls = []
         # Добавляем одну прямую VLESS ссылку
         try:
             data = parse_vless(input_text)
@@ -252,6 +255,8 @@ def add_from_url():
             messagebox.showerror("Ошибка", f"Не удалось распарсить VLESS ссылку: {e}")
         return
     elif input_text.startswith("ss://"):
+        clear_xray_configs()
+        base64_urls = []
         try:
             data = parse_shadowsocks(input_text)
             tag = data["tag"]
@@ -274,7 +279,8 @@ def add_from_url():
             r = requests.get(input_text, headers=headers)
             # r = requests.get(input_text)
             r.raise_for_status()
-
+            clear_xray_configs()
+            base64_urls = []
             try:
                 # Попытка base64-декодирования как раньше
                 decoded = base64.b64decode(r.text.strip()).decode("utf-8")
@@ -482,20 +488,25 @@ def get_executable_path():
 
 def is_in_startup(app_name=APP_NAME):
     try:
-        key = winreg.OpenKey(
+        with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
             0, winreg.KEY_READ
-        )
-        value, _ = winreg.QueryValueEx(key, app_name)
-        winreg.CloseKey(key)
-        return os.path.abspath(value) == get_executable_path()
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, app_name)
+
+        exe_path = get_executable_path().lower()
+        return exe_path in value.lower()
+
     except FileNotFoundError:
         return False
+
 
 def add_to_startup(app_name=APP_NAME, path=None):
     if path is None:
         path = get_executable_path()
+    path = f'"{path}" --autostart'
+
     key = winreg.OpenKey(
         winreg.HKEY_CURRENT_USER,
         r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -652,33 +663,43 @@ root.configure(bg="#e8e8e8")
 frame = tk.Frame(root, bg="#e8e8e8")
 frame.pack(padx=10, pady=5)
 
-entry = tk.Entry(frame, width=35, bg="#fff", fg="#000", insertbackground="#ffffff", font=("Arial", 12))
-entry.pack(side="left", padx=10, pady=0, ipady=3)
+entry = tk.Entry(frame, width=31, bg="#fff", fg="#000", insertbackground="#ffffff", font=("Arial", 12))
+entry.pack(side="left", padx=5, pady=0, ipady=3)
 
 ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
 
 # вставка из буфера обмена
-# def add_from_clipboard_and_parse():
-    # try:
-        # clipboard_text = root.clipboard_get().strip()
-        # entry.delete(0, tk.END)
-        # entry.insert(0, clipboard_text)
-        # add_from_url()
-    # except Exception as e:
-        # messagebox.showerror("Ошибка", f"Не удалось получить данные из буфера обмена: {e}")
+def add_from_clipboard_and_parse():
+    try:
+        clipboard_text = root.clipboard_get().strip()
+        entry.delete(0, tk.END)
+        entry.insert(0, clipboard_text)
+        add_from_url()
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось получить данные из буфера обмена: {e}")
 
 
 # Загрузка изображения (иконки)
 img = Image.open(resource_path("img/ico.png"))  # путь к вашей картинке
-img = img.resize((35, 35), Image.Resampling.LANCZOS)
-icon = ImageTk.PhotoImage(img)
+img = img.resize((30, 30), Image.Resampling.LANCZOS)
+icon1 = ImageTk.PhotoImage(img)
 
 # В кнопке меняем команду:
-btnBuffer = tk.Button(frame, image=icon, command=add_from_url, bg="#d1efff")
-btnBuffer.pack(side="right", pady=3)
+btnBuffer = tk.Button(frame, image=icon1, command=add_from_url, bg="#dcedf8")
+btnBuffer.pack(side="right", padx=2.2, pady=3)
 
 ToolTip(btnBuffer, "Обновить подписку")
 
+# Загрузка изображения (иконки)
+img = Image.open(resource_path("img/ref.png"))  # путь к вашей картинке
+img = img.resize((30, 30), Image.Resampling.LANCZOS)
+icon2 = ImageTk.PhotoImage(img)
+
+# В кнопке меняем команду:
+btnBuffer = tk.Button(frame, image=icon2, command=add_from_clipboard_and_parse, bg="#dcedf8")
+btnBuffer.pack(side="right", padx=2.2, pady=3)
+
+ToolTip(btnBuffer, "Вставить из буфера обмена")
 
 
 frame = tk.Frame(root)
@@ -758,6 +779,10 @@ link2.bind("<Button-1>", github)
 
 load_base64_urls()
 load_state()
+
+# если запущено из автозапуска — стартуем свернутыми
+if IS_AUTOSTART:
+    root.iconify()
 
 root.after(3000, check_latest_version)  # Проверка через 2 секунды после запуска
 
