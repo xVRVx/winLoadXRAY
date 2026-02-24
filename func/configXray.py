@@ -37,7 +37,7 @@ def generate_config(data):
                 },
                 {
                 "domain": [
-                    "habr.com"
+                    "habr.com", "apkmirror.com"
                 ],
                 "outboundTag": "proxy"
                 },
