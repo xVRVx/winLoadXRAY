@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, filedialog, PhotoImage
+from tkinter import messagebox, filedialog, PhotoImage, ttk
 from PIL import Image, ImageTk
 import base64
 import requests
@@ -12,6 +12,10 @@ import winreg
 import re
 import ctypes
 import webbrowser
+import queue
+import threading
+import time
+import concurrent.futures
 from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'func'))
@@ -21,32 +25,78 @@ from tun2proxy import get_default_interface, patch_direct_out_interface, start_t
 from copyPast import cmd_copy, cmd_paste, cmd_cut, cmd_select_all
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v0.84-beta"
-XRAY_VERS = "v25.12.8"
+APP_VERS = "v0.85-beta"
+XRAY_VERS = "v26.2.6"
 
 xray_process = None
 tun_enabled = False
 
 IS_AUTOSTART = "--autostart" in sys.argv
 
+
+# --- Новые функции для пинга ---
+
+def get_sni_from_config(file_path: str) -> str or None:
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        if not ("outbounds" in config and len(config['outbounds']) > 0):
+            return None
+
+        stream_settings = config['outbounds'][0].get('streamSettings', {})
+        if not stream_settings:
+            return None
+
+        if 'realitySettings' in stream_settings and stream_settings['realitySettings'].get('serverName'):
+            return stream_settings['realitySettings']['serverName']
+
+        if 'tlsSettings' in stream_settings and stream_settings['tlsSettings'].get('serverName'):
+            return stream_settings['tlsSettings']['serverName']
+
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+    
+    return None
+
+def http_ping(hostname: str, timeout: int = 3) -> (int, str):
+    if not hostname:
+        return -1, "No SNI"
+    url = f"https://{hostname}"
+    
+    # Отключаем использование прокси для точного измерения пинга напрямую
+    proxies = {
+        "http": None,
+        "https": None,
+    }
+    
+    try:
+        start_time = time.perf_counter()
+        response = requests.head(url, timeout=timeout, proxies=proxies)
+        end_time = time.perf_counter()
+        if 200 <= response.status_code < 400:
+            return round((end_time - start_time) * 1000), "OK"
+        else:
+            return -1, f"HTTP {response.status_code}"
+    except requests.exceptions.Timeout:
+        return -1, "Timeout"
+    except requests.exceptions.RequestException:
+        return -1, "Error"
+
 # --- Функция для проверки последней версии на GitHub ---
 def check_latest_version():
     try:
-        # Получаем информацию о последнем релизе
         response = requests.get("https://api.github.com/repos/xVRVx/winLoadXRAY/releases/latest", timeout=10)
         response.raise_for_status()
         latest_release = response.json()
         latest_version = latest_release.get("tag_name", "")
         
-        # Сравниваем версии
         if latest_version and latest_version != APP_VERS:
-            # Показываем красную ссылку для скачивания
             show_update_link(latest_version)
     except Exception as e:
         print(f"Ошибка при проверке версии: {e}")
 
 def show_update_link(latest_version):
-  
     update_link = tk.Label(
         frameBot,
         text=f"Доступна: {latest_version}",
@@ -56,16 +106,12 @@ def show_update_link(latest_version):
         font=("Arial", 10, "underline")
     )
     ToolTip(update_link, "Замените: "+ get_executable_path())
-    
-    update_link.pack(side="right", padx=(0, 20), pady=5)  # Добавляем отступ справа
+    update_link.pack(side="right", padx=(0, 20), pady=5)
 
-    # Обработчик клика по ссылке
     def download_update(event):
         webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/releases/")
-        # webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/releases/latest/download/winLoadXRAY.exe")
     
     update_link.bind("<Button-1>", download_update)
-
 
 def open_link(event):
     webbrowser.open_new("https://t.me/SkyBridge_VPN_bot")
@@ -75,18 +121,13 @@ def github(event):
 
 active_tag = None
 proxy_enabled = False
-
 base64_urls = []
-
 
 CONFIGS_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME, 'configs')
 os.makedirs(CONFIGS_DIR, exist_ok=True)
     
-#CONFIG_LIST_FILE = os.path.join(CONFIGS_DIR, "config_list.json")
 LINKS_FILE = os.path.join(CONFIGS_DIR, "links.json")
-
 STATE_FILE = os.path.join(CONFIGS_DIR, "state.json")
-
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -94,10 +135,7 @@ def resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
     
 XRAY_EXE = resource_path("xray/xray.exe")
-
-
 CREATE_NO_WINDOW = 0x08000000
-
 
 def save_state():
     state = {
@@ -123,14 +161,11 @@ def load_state():
         proxy_enabled = state.get("proxy_enabled", False)
 
         if proxy_enabled:
-            
-            toggle_system_proxy()  # включаем системный прокси
-            toggle_system_proxy()  # костыль)
-
+            toggle_system_proxy()
+            toggle_system_proxy()
 
         if active_tag and active_tag in configs:
             highlight_active(active_tag)
-            # Автозапуск Xray
             config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
             if os.path.exists(config_path):
                 global xray_process
@@ -140,13 +175,11 @@ def load_state():
     except Exception as e:
         print(f"Ошибка загрузки состояния: {e}")
         
-
-
 def update_proxy_button_color():
     if proxy_enabled:
         btn_proxy.config(bg="orange")
     else:
-        btn_proxy.config(bg="SystemButtonFace")  # цвет по умолчанию на Windows
+        btn_proxy.config(bg="SystemButtonFace")
 
 def save_base64_urls():
     global base64_urls
@@ -154,7 +187,6 @@ def save_base64_urls():
         json.dump(base64_urls, f, ensure_ascii=False, indent=2)
 
 def load_base64_urls():
-    # 1. Загружаем все старые конфиги из папки
     configs.clear()
     listbox.delete(0, tk.END)
 
@@ -169,25 +201,17 @@ def load_base64_urls():
             except Exception as e:
                 print(f"Не удалось загрузить конфиг {filename}: {e}")
 
-    # 2. Загружаем подписку из LINKS_FILE (как было раньше)
     if os.path.exists(LINKS_FILE):
         with open(LINKS_FILE, "r", encoding="utf-8") as f:
             links = json.load(f)
 
         if isinstance(links, list) and links:
-            link = links[0]  # Берём первую ссылку
+            link = links[0]
         else:
-            return  # Нечего загружать
+            return
 
         entry.delete(0, tk.END)
         entry.insert(0, link)
-        # if listbox.size() > 0:
-            # listbox.select_set(0)
-
-
-
-
-
 
 # --- Инициализация ---
 if not os.path.exists(CONFIGS_DIR):
@@ -195,9 +219,6 @@ if not os.path.exists(CONFIGS_DIR):
 
 configs = {}
 
-
-
-# --- Системный прокси ---
 def toggle_system_proxy(host="127.0.0.1", port=2080):
     global proxy_enabled
     path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
@@ -218,11 +239,8 @@ def toggle_system_proxy(host="127.0.0.1", port=2080):
         messagebox.showerror("Ошибка", f"Не удалось переключить прокси: {e}")
 
 def clear_xray_configs():
-    # Очистка старых данных
     configs.clear()
     listbox.delete(0, tk.END)
-    
-    # Удаляем все json-файлы из папки CONFIGS_DIR
     for filename in os.listdir(CONFIGS_DIR):
         if filename.endswith(".json"):
             try:
@@ -239,7 +257,6 @@ def add_from_url():
     if input_text.startswith("vless://"):
         clear_xray_configs()
         base64_urls = []
-        # Добавляем одну прямую VLESS ссылку
         try:
             data = parse_vless(input_text)
             tag = data["tag"]
@@ -272,17 +289,14 @@ def add_from_url():
             messagebox.showerror("Ошибка", f"Не удалось распарсить SS ссылку: {e}")
         return
 
-
     if input_text.startswith("https"):
         try:
             headers = {'User-Agent': f'{APP_NAME}/{APP_VERS}'}
             r = requests.get(input_text, headers=headers)
-            # r = requests.get(input_text)
             r.raise_for_status()
             clear_xray_configs()
             base64_urls = []
             try:
-                # Попытка base64-декодирования как раньше
                 decoded = base64.b64decode(r.text.strip()).decode("utf-8")
                 lines = [l.strip() for l in decoded.splitlines() if l.startswith("vless://") or l.startswith("ss://")]
                 if not lines:
@@ -295,7 +309,6 @@ def add_from_url():
                             data = parse_shadowsocks(line)
                         else:
                             continue
-
                         tag = data["tag"]
                         if tag not in configs:
                             configs[tag] = data
@@ -305,40 +318,25 @@ def add_from_url():
                                 f.write(config_json)
                     except Exception as e:
                         print(f"[!] Ошибка в строке: {line}\n{e}")
-
             except Exception:
-                # Если base64 не прокатил — пытаемся загрузить как чистый JSON (с очисткой html)
                 clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
-                
                 try:
                     loaded_data = json.loads(clean_content)
-                    
-                    # Приводим к списку, даже если прилетел один объект
                     if isinstance(loaded_data, list):
                         items = loaded_data
                     elif isinstance(loaded_data, dict):
                         items = [loaded_data]
                     else:
                         raise ValueError("Полученные данные не являются JSON объектом или списком")
-
                     added_count = 0
-                    
                     for config_data in items:
-                        # Пытаемся найти имя для конфига:
-                        # 1. Сначала поле "remarks" (оно есть в вашем файле примера)
-                        # 2. Если нет, поле "tag"
-                        # 3. Если нет, генерируем случайное имя
                         tag = unquote(config_data.get("remarks", config_data.get("tag", f"import_json_{added_count}")))
-                        tag = sanitize_filename(tag)  # Декодируем emoji и кириллицу
-
+                        tag = sanitize_filename(tag) 
                         configs[tag] = config_data
                         listbox.insert(tk.END, tag)
-                        
                         with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as cf:
                             json.dump(config_data, cf, indent=2, ensure_ascii=False)
-                        
                         added_count += 1
-
                     if added_count > 0:
                         base64_urls.append(input_text)
                         save_base64_urls()
@@ -346,25 +344,30 @@ def add_from_url():
                         return
                     else:
                          messagebox.showwarning("Внимание", "JSON был валидным, но пуст.")
-
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось распарсить JSON конфиг: {e}")
                     return
 
             base64_urls.append(input_text)
             save_base64_urls()
-            #messagebox.showinfo("Добавлено", f"Добавлено {len(lines)} конфигов.")
-
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось загрузить/распарсить: {e}")
         return
-
     messagebox.showerror("Ошибка", "Введите корректную VLESS ссылку или URL на base64 с конфигами.")
 
 def sanitize_filename(name):
-    # Удаляем недопустимые символы для имени файла в Windows
     return re.sub(r'[<>:"/\\|?*]', '_', name)
 
+# Очистка строк listbox от суффиксов пинга по истечению времени
+def clean_listbox_texts():
+    current_items = listbox.get(0, tk.END)
+    for i, item in enumerate(current_items):
+        if " - " in item:
+            pure_tag = item.split(" - ")[0]
+            listbox.delete(i)
+            listbox.insert(i, pure_tag)
+            if active_tag == pure_tag:
+                listbox.itemconfig(i, {'bg': 'lightgreen', 'fg': 'black'})
 
 # --- Запуск Xray ---
 def run_selected():
@@ -381,7 +384,8 @@ def run_selected():
         messagebox.showwarning("Выбор", "Выберите конфиг из списка.")
         return
 
-    tag = listbox.get(selected[0])
+    # Отсекаем " - 140ms", если попытались запустить во время показа пинга
+    tag = listbox.get(selected[0]).split(" - ")[0]
     config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
     if not os.path.exists(XRAY_EXE):
         messagebox.showerror("Ошибка", "Файл xray.exe не найден.")
@@ -396,10 +400,8 @@ def run_selected():
         messagebox.showerror("Ошибка", f"Не удалось запустить Xray: {e}")
 
 
-# --- кнопка стоп
 def stop_xray():
     global xray_process
-
     if xray_process and xray_process.poll() is None:
         try:
             xray_process.terminate()
@@ -408,14 +410,11 @@ def stop_xray():
             messagebox.showerror("Ошибка", f"Не удалось остановить Xray: {e}")
 
     xray_process = None
-    clear_highlight()  # <--- убираем подсветку активного конфига
+    clear_highlight()  
     btn_run.config(text="Запустить конфиг", bg="SystemButtonFace")
-
 
 def stop_system_proxy():
     global proxy_enabled
-
-    # Отключаем системный прокси
     try:
         path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
@@ -425,38 +424,31 @@ def stop_system_proxy():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось отключить прокси: {e}")
 
-# --- Функция подсветки активного тега: ---
 def highlight_active(tag):
     global active_tag
-
-    # Сброс цвета у старого
     if active_tag is not None:
-        try:
-            idx = listbox.get(0, tk.END).index(active_tag)
-            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
-        except ValueError:
-            pass
+        for i, item in enumerate(listbox.get(0, tk.END)):
+            pure_item = item.split(" - ")[0]
+            if pure_item == active_tag:
+                listbox.itemconfig(i, {'bg': 'white', 'fg': 'black'})
 
-    # Новый активный
-    try:
-        idx = listbox.get(0, tk.END).index(tag)
-        listbox.itemconfig(idx, {'bg': 'lightgreen', 'fg': 'black'})
-        active_tag = tag
-        save_state()
-    except ValueError:
-        active_tag = None
+    active_tag = tag
+    save_state()
+    for i, item in enumerate(listbox.get(0, tk.END)):
+        pure_item = item.split(" - ")[0]
+        if pure_item == tag:
+            listbox.itemconfig(i, {'bg': 'lightgreen', 'fg': 'black'})
+            break
 
 def clear_highlight():
     global active_tag
     if active_tag is not None:
-        try:
-            idx = listbox.get(0, tk.END).index(active_tag)
-            listbox.itemconfig(idx, {'bg': 'white', 'fg': 'black'})
-        except ValueError:
-            pass
+        for i, item in enumerate(listbox.get(0, tk.END)):
+            pure_item = item.split(" - ")[0]
+            if pure_item == active_tag:
+                listbox.itemconfig(i, {'bg': 'white', 'fg': 'black'})
         active_tag = None
 
-#подсказка при наведении
 class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget
@@ -471,7 +463,7 @@ class ToolTip:
         x = self.widget.winfo_rootx() + 20
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
         self.tipwindow = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)  # Без рамок окна
+        tw.wm_overrideredirect(True) 
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, background="#ffffe0", relief="solid", borderwidth=1,
                          font=("tahoma", "8", "normal"))
@@ -481,7 +473,6 @@ class ToolTip:
         if self.tipwindow:
             self.tipwindow.destroy()
             self.tipwindow = None
-
 
 def get_executable_path():
     return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
@@ -494,13 +485,10 @@ def is_in_startup(app_name=APP_NAME):
             0, winreg.KEY_READ
         ) as key:
             value, _ = winreg.QueryValueEx(key, app_name)
-
         exe_path = get_executable_path().lower()
         return exe_path in value.lower()
-
     except FileNotFoundError:
         return False
-
 
 def add_to_startup(app_name=APP_NAME, path=None):
     if path is None:
@@ -527,7 +515,6 @@ def remove_from_startup(app_name=APP_NAME):
     except FileNotFoundError:
         pass
 
-# ---- Tkinter UI ----
 def toggle_startup():
     if startup_var.get():
         add_to_startup()
@@ -537,14 +524,10 @@ def toggle_startup():
 def restart_xray_with_active():
     global xray_process
     if not active_tag:
-        print("Нет активного тега для перезапуска.")
         return
-
     config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
     if not os.path.exists(config_path):
-        print(f"Конфиг не найден: {config_path}")
         return
-
     try:
         xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
         highlight_active(active_tag)
@@ -560,30 +543,22 @@ def is_admin():
 
 def run_as_admin():
     script = get_executable_path()
-    params = ""  # можно передать аргументы, если нужно
+    params = "" 
     try:
-        ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", script, params, None, 1
-        )
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", script, params, None, 1)
         save_state()
         stop_xray()
         stop_system_proxy()
-        sys.exit()  # завершить текущий процесс
+        sys.exit() 
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось получить права администратора: {e}")
 
- 
 def vrv_tun_mode_toggle():
     global tun_enabled, active_tag
-
     if not is_admin():
-        # answer = messagebox.askyesno("Требуются права", "Нужно запустить с правами администратора. Перезапустить?")
-        # if answer:
-            run_as_admin()
-        # return
+        run_as_admin()
 
     if not tun_enabled:
-        # ВКЛ
         interface = get_default_interface()
         patch_direct_out_interface(CONFIGS_DIR, interface)
 
@@ -597,10 +572,122 @@ def vrv_tun_mode_toggle():
         btn_tun.config(text="Выключить TUN", bg="#ffcccc")
         tun_enabled = True
     else:
-        # ВЫКЛ
         stop_tun2proxy()
         btn_tun.config(text="Включить TUN", bg="SystemButtonFace")
         tun_enabled = False
+
+# --- Контекстное меню (одиночный Ping) ---
+def on_context_ping_click():
+    selected = listbox.curselection()
+    if not selected:
+        return
+
+    idx = selected[0]
+    item_text = listbox.get(idx)
+    # Если уже пинговали недавно и надпись висит, не пингуем снова
+    if " - " in item_text:
+        return
+        
+    tag = item_text
+    config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
+    sni = get_sni_from_config(config_path)
+
+    def ping_task():
+        if sni:
+            ms, status = http_ping(sni, timeout=2)
+            res_str = f"{ms} ms" if ms >= 0 else "Ошибка"
+        else:
+            res_str = "No SNI"
+
+        def update_ui():
+            # Дописываем к строке результат
+            new_text = f"{tag} - {res_str}"
+            listbox.delete(idx)
+            listbox.insert(idx, new_text)
+            
+            if active_tag == tag:
+                listbox.itemconfig(idx, {'bg': 'lightgreen', 'fg': 'black'})
+            
+            # Убираем результат через 2 секунды
+            root.after(2000, clean_listbox_texts)
+
+        root.after(0, update_ui)
+
+    threading.Thread(target=ping_task, daemon=True).start()
+
+# --- Автовыбор конфига (выбор 2-го лучшего) ---
+def on_auto_select_click():
+    items = listbox.get(0, tk.END)
+    if not items:
+        return
+
+    tags = [item.split(" - ")[0] for item in items]
+    btn_auto.config(state=tk.DISABLED, text="Ищем...", fg="black")
+
+    def ping_all_task():
+        def check_tag(tag):
+            config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
+            sni = get_sni_from_config(config_path)
+            if sni:
+                ms, _ = http_ping(sni, timeout=2)
+                return tag, ms
+            return tag, -1
+
+        # Параллельный пинг
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(check_tag, tags))
+
+        # Выбираем 2-ой лучший результат
+        valid_results = [r for r in results if r[1] >= 0]
+        valid_results.sort(key=lambda x: x[1])
+        
+        best_tag = None
+        if len(valid_results) > 1:
+            best_tag = valid_results[1][0]  # Второй по счету (индекс 1)
+        elif len(valid_results) == 1:
+            best_tag = valid_results[0][0]  # Если рабочий только один
+
+        def update_ui():
+            global xray_process
+            
+            # Обновляем все строки, дописывая результаты
+            for i, original_tag in enumerate(tags):
+                ms = next((r[1] for r in results if r[0] == original_tag), -1)
+                res_str = f"{ms} ms" if ms >= 0 else "Ошибка"
+                
+                new_text = f"{original_tag} - {res_str}"
+                listbox.delete(i)
+                listbox.insert(i, new_text)
+                
+                if active_tag == original_tag:
+                    listbox.itemconfig(i, {'bg': 'lightgreen', 'fg': 'black'})
+
+            if best_tag:
+                idx = tags.index(best_tag)
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(idx)
+                listbox.activate(idx)
+                listbox.see(idx)
+                
+                # --- НОВОЕ: Остановка и автозапуск конфига ---
+                if xray_process and xray_process.poll() is None:
+                    stop_xray()
+                
+                # run_selected самостоятельно подхватит выделенный сейчас элемент,
+                # запустит xray и корректно его подсветит
+                run_selected()
+                # ---------------------------------------------
+
+            # Через 2 секунды возвращаем обычный вид кнопки и списка
+            def finish():
+                btn_auto.config(state=tk.NORMAL, text="Автовыбор", fg="black")
+                clean_listbox_texts()
+
+            root.after(2000, finish)
+
+        root.after(0, update_ui)
+
+    threading.Thread(target=ping_all_task, daemon=True).start()
 
 
 # --- Интерфейс ---
@@ -630,7 +717,7 @@ def select_config():
     selected = listbox.curselection()
     if not selected:
         return
-    tag = listbox.get(selected[0])
+    tag = listbox.get(selected[0]).split(" - ")[0]
     highlight_active(tag)
 
 def on_enter_key(event):
@@ -638,7 +725,6 @@ def on_enter_key(event):
     if entry == root.focus_get():
         add_from_url()
     else:
-        # Устанавливаем активный элемент как выбранный, если нет выделения
         if not listbox.curselection():
             active = listbox.index(tk.ACTIVE)
             if active >= 0:
@@ -650,16 +736,11 @@ def on_enter_key(event):
         else:
             run_selected()
 
-
 root.bind('<Return>', on_enter_key)
 
 root.title(APP_NAME+" "+APP_VERS+" "+XRAY_VERS)
-
 root.configure(bg="#e8e8e8")
 
-
-
-# Контейнер для поля ввода и иконки
 frame = tk.Frame(root, bg="#e8e8e8")
 frame.pack(padx=10, pady=5)
 
@@ -668,7 +749,6 @@ entry.pack(side="left", padx=5, pady=0, ipady=3)
 
 ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
 
-# вставка из буфера обмена
 def add_from_clipboard_and_parse():
     try:
         clipboard_text = root.clipboard_get().strip()
@@ -678,69 +758,79 @@ def add_from_clipboard_and_parse():
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось получить данные из буфера обмена: {e}")
 
-
-# Загрузка изображения (иконки)
-img = Image.open(resource_path("img/ico.png"))  # путь к вашей картинке
+img = Image.open(resource_path("img/ico.png")) 
 img = img.resize((30, 30), Image.Resampling.LANCZOS)
 icon1 = ImageTk.PhotoImage(img)
 
-# В кнопке меняем команду:
 btnBuffer = tk.Button(frame, image=icon1, command=add_from_url, bg="#dcedf8")
 btnBuffer.pack(side="right", padx=2.2, pady=3)
-
 ToolTip(btnBuffer, "Обновить подписку")
 
-# Загрузка изображения (иконки)
-img = Image.open(resource_path("img/ref.png"))  # путь к вашей картинке
+img = Image.open(resource_path("img/ref.png")) 
 img = img.resize((30, 30), Image.Resampling.LANCZOS)
 icon2 = ImageTk.PhotoImage(img)
 
-# В кнопке меняем команду:
 btnBuffer = tk.Button(frame, image=icon2, command=add_from_clipboard_and_parse, bg="#dcedf8")
 btnBuffer.pack(side="right", padx=2.2, pady=3)
-
 ToolTip(btnBuffer, "Вставить из буфера обмена")
 
 
-frame = tk.Frame(root)
-frame.pack(padx=10, pady=5)
+frame_list = tk.Frame(root)
+frame_list.pack(padx=10, pady=5)
 
-listbox = tk.Listbox(frame, width=38, height=8, bg="#fff", font=("Arial", 12))
+listbox = tk.Listbox(frame_list, width=38, height=8, bg="#fff", font=("Arial", 12))
 listbox.pack(side=tk.LEFT, fill=tk.BOTH)
-# Создаём вертикальную полосу прокрутки
-scrollbar = tk.Scrollbar(frame, orient=tk.VERTICAL)
+
+scrollbar = tk.Scrollbar(frame_list, orient=tk.VERTICAL)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# Связываем Listbox и Scrollbar
 listbox.config(yscrollcommand=scrollbar.set)
 scrollbar.config(command=listbox.yview)
 
+# --- Контекстное меню для ListBox ---
+context_menu = tk.Menu(root, tearoff=0)
+context_menu.add_command(label="SNI Ping", command=on_context_ping_click)
+
+def show_context_menu(event):
+    try:
+        index = listbox.nearest(event.y)
+        if index >= 0:
+            listbox.selection_clear(0, tk.END)
+            listbox.selection_set(index)
+            listbox.activate(index)
+            context_menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        context_menu.grab_release()
+
+listbox.bind("<Button-3>", show_context_menu)
 
 
-frame = tk.Frame(root)
-frame.pack(padx=10, pady=5)
-btn_run = tk.Button(frame, text="Запустить конфиг", font=("Arial", 12), command=run_selected)
+# --- Кнопки управления (Верхний ряд) ---
+frame_btns = tk.Frame(root)
+frame_btns.pack(padx=10, pady=5, fill=tk.X)
+
+btn_run = tk.Button(frame_btns, text="Запустить конфиг", font=("Arial", 12), command=run_selected)
 btn_run.pack(side=tk.LEFT, pady=3)
 ToolTip(btn_run, "socks5 на 2080 порту")
 
-btn_proxy = tk.Button(frame, text="Включить системный прокси", font=("Arial", 12), command=toggle_system_proxy)
+btn_proxy = tk.Button(frame_btns, text="Включить системный прокси", font=("Arial", 12), command=toggle_system_proxy)
 ToolTip(btn_proxy, "Запустите конфиг и выключите другие прокси расширения.\nРаботает только для браузеров.")
-
 btn_proxy.pack(side=tk.RIGHT, pady=3)
-#tk.Button(root, text="Остановить Xray", command=stop_xray, bg="#ffcccc").pack(pady=3)
 
 
-        
-frame = tk.Frame(root)
-frame.pack(padx=10, pady=5)
+# --- Кнопки управления (Нижний ряд) ---
+frame_bottom = tk.Frame(root)
+frame_bottom.pack(padx=10, pady=5, fill=tk.X)
 
 startup_var = tk.BooleanVar(value=is_in_startup())
-startup_check = tk.Checkbutton(frame, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
-startup_check.pack(side=tk.LEFT, pady=4, padx=14)
+startup_check = tk.Checkbutton(frame_bottom, text="Автозапуск", font=("Arial", 12), variable=startup_var, command=toggle_startup)
+startup_check.pack(side=tk.LEFT, pady=4)
 
-
-    
-btn_tun = tk.Button(frame, text="Включить TUN", font=("Arial", 12), command=vrv_tun_mode_toggle)
+btn_auto = tk.Button(frame_bottom, text="Автовыбор", font=("Arial", 12), command=on_auto_select_click)
+ToolTip(btn_auto, "Проверить пинг и выбрать лучший вариант")
+btn_auto.pack(side=tk.LEFT, padx=10, pady=3)
+  
+btn_tun = tk.Button(frame_bottom, text="Включить TUN", font=("Arial", 12), command=vrv_tun_mode_toggle)
 ToolTip(btn_tun, "Только от имени Администратора! Ожидание VPN 30 сек!\nСоздается виртуальная сетевая карта.")
 btn_tun.pack(side=tk.RIGHT, pady=3)
 
@@ -748,52 +838,28 @@ btn_tun.pack(side=tk.RIGHT, pady=3)
 frameBot = tk.Frame(root)
 frameBot.pack(padx=10, pady=2)
 
-# Создаём "ссылку" внизу
-link1 = tk.Label(
-    frameBot,
-    text="Наш Telegram бот",
-    fg="#000",
-    cursor="hand2",
-    font=("Arial", 10, "underline")
-)
+link1 = tk.Label(frameBot, text="Наш Telegram бот", fg="#000", cursor="hand2", font=("Arial", 10, "underline"))
 link1.pack(side="left", pady=5)
-
-# Привязываем обработчик
 link1.bind("<Button-1>", open_link)
 
-# Создаём "ссылку" внизу
-link2 = tk.Label(
-    frameBot,
-    text="GitHub",
-    fg="#000",
-    cursor="hand2",
-    font=("Arial", 10, "underline")
-)
+link2 = tk.Label(frameBot, text="GitHub", fg="#000", cursor="hand2", font=("Arial", 10, "underline"))
 link2.pack(side="left", pady=5)
-
-# Привязываем обработчик
 link2.bind("<Button-1>", github)
-
-# Здесь будет появляться ссылка на обновление при проверке версии
-
 
 load_base64_urls()
 load_state()
 
-# если запущено из автозапуска — стартуем свернутыми
 if IS_AUTOSTART:
     root.iconify()
 
-root.after(3000, check_latest_version)  # Проверка через 2 секунды после запуска
+root.after(3000, check_latest_version)
 
 def on_closing():
     save_state()
     stop_xray()
-    stop_system_proxy()  # Выключим прокси
-    stop_tun2proxy()   # Выключим tun режим
-    root.destroy()  # Закроем окно
+    stop_system_proxy()
+    stop_tun2proxy()
+    root.destroy()
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
-
-
 root.mainloop()
