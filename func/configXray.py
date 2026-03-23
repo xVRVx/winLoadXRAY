@@ -44,6 +44,9 @@ def generate_config(data):
                 {
                     "domain": [
                         "geosite:private",
+                        "ifconfig.me",
+                        "checkip.amazonaws.com",
+                        "pify.org",
                         "geosite:apple",
                         "geosite:apple-pki",
                         "geosite:huawei",
