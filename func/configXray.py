@@ -47,6 +47,7 @@ def generate_config(data):
                         "ifconfig.me",
                         "checkip.amazonaws.com",
                         "pify.org",
+                        "geosite:category-ip-geo-detect",
                         "geosite:apple",
                         "geosite:apple-pki",
                         "geosite:huawei",
