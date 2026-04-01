@@ -3,12 +3,12 @@ VPN приложение для vless raw reality и голых конфигов
 
 По сути это python обертка вокруг готового [ядра XRAY](https://github.com/XTLS/Xray-core) для win64, также используется [tun2proxy](https://github.com/tun2proxy/tun2proxy) для tun режима.
 
-**Умеет:**
+**Умеет**
 - парсить подписку и запускать vless raw reality, shadowsocks и xhttp reality в mode:auto
 - парсить голый vless:// и ss://
 - парсить чистый конфиг xray для клиента.
 
-**Запускает:**
+**Запускает**
 - socks5 прокси на 2080 порту
 - системный прокси **(рекомендован для браузеров)**
 - tun режим (от администратора)
@@ -24,7 +24,7 @@ VPN приложение для vless raw reality и голых конфигов
 ```bash
 cd C:\Xray-windows-64 && python winLoadXRAY.py
 ```
-**Сборка:**
+**Сборка**
 ```bash
 pyinstaller --onefile --windowed --icon=img/icon.ico --add-binary "xray/xray.exe;xray" --add-binary "xray/geoip.dat;xray" --add-binary "xray/geosite.dat;xray" --add-data "img/ico.png;img" --add-data "img/ref.png;img" --add-data "img/icon.ico;img" --add-data "img/logo.png;img" --add-data "tun2proxy/tun2proxy-bin.exe;tun2proxy" --add-data "tun2proxy/tun2proxy.dll;tun2proxy" --add-data "tun2proxy/wintun.dll;tun2proxy" --add-data "tun2proxy/udpgw-server.exe;tun2proxy" --add-data "func;func" winLoadXRAY.py
 ```
@@ -37,8 +37,20 @@ https://github.com/XTLS/Xray-core/releases/download/v25.10.15/Xray-windows-64.zi
 
 https://github.com/tun2proxy/tun2proxy/releases/download/v0.7.16/tun2proxy-x86_64-pc-windows-msvc.zip
 
-**Скриншот:**
+**Скриншот**
 
 <img src="img/screen.png" alt="Скриншот" width="400"/>
 
+**Компиляция под WIN7**
 
+Установить Python 3.8.10
+```bash
+cd C:\xray_win7 && py -3.8 -m venv venv_win7
+venv_win7\Scripts\activate.bat
+python --version
+python -m pip install --upgrade pip
+pip install customtkinter pillow requests pystray pyinstaller
+```
+Скачать и распокавать xray: https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-win7-64.zip
+
+Запустить компиляцию.
