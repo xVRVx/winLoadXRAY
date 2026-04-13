@@ -18,7 +18,7 @@ VPN приложение для vless raw reality и голых конфигов
 
 **Запуск**
 
-Зависимости: pip install pillow requests pyinstaller customtkinter pystray
+Зависимости: pip install pillow requests pyinstaller customtkinter pystray pywin32
 
 Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
 ```bash
@@ -49,7 +49,7 @@ cd C:\xray_win7 && py -3.8 -m venv venv_win7
 venv_win7\Scripts\activate.bat
 python --version
 python -m pip install --upgrade pip
-pip install customtkinter pillow requests pystray pyinstaller
+pip install customtkinter pillow requests pystray pyinstaller pywin32
 ```
 Скачать и распокавать xray: https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-win7-64.zip
 
