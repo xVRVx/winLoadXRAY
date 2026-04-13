@@ -38,7 +38,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.08-beta"
+APP_VERS = "v1.09-beta"
 XRAY_VERS = "v26.3.27"
 
 xray_process = None
@@ -1041,6 +1041,23 @@ if HAS_TRAY:
         except:
             pass
     setup_tray()
+
+try:
+    import win32api
+    import win32con
+
+    def _windows_shutdown_handler(ctrl_type):
+        # Если пришел сигнал на выключение ПК, перезагрузку или выход пользователя
+        if ctrl_type in (win32con.CTRL_SHUTDOWN_EVENT, win32con.CTRL_LOGOFF_EVENT):
+            # Вызываем твою родную функцию закрытия (она выключит прокси и Xray)
+            actual_quit() 
+            return True
+        return False
+
+    # Регистрируем слушатель системных событий Windows
+    win32api.SetConsoleCtrlHandler(_windows_shutdown_handler, True)
+except ImportError:
+    pass 
 
 
 # --- Инициализация перед запуском ---
