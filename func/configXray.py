@@ -50,17 +50,8 @@ def generate_config(data):
                         "geosite:category-ip-geo-detect",
                         "geosite:apple",
                         "geosite:apple-pki",
-                        "geosite:huawei",
-                        "geosite:xiaomi",
-                        "geosite:category-android-app-download",
-                        "geosite:f-droid",
                         "geosite:yandex",
                         "geosite:vk",
-                        "geosite:microsoft",
-                        "geosite:win-update",
-                        "geosite:win-extra",
-                        "geosite:google-play",
-                        "geosite:steam",
                         "geosite:category-ru"
                     ],
                     "outboundTag": "direct"
