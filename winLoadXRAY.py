@@ -38,7 +38,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.12-beta"
+APP_VERS = "v1.15-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
