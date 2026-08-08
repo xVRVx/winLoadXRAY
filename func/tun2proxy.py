@@ -109,7 +109,9 @@ def start_tun2proxy(resource_path):
         "--tun", "sbtun1",
         "--dns", "over-tcp"
     ]
+    # закрыть окно логов
     tun_process = subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
+    # tun_process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
     time.sleep(2)
 
     print("\ntun_process ",tun_process)
@@ -120,8 +122,8 @@ def start_tun2proxy(resource_path):
         '& netsh dns add encryption server=1.1.1.1 dohtemplate=https://cloudflare-dns.com/dns-query autoupgrade=yes '
         '& netsh interface ipv4 set dnsservers name="sbtun1" static 1.1.1.1 primary'
         '& netsh interface ipv4 add dnsservers name="sbtun1" 8.8.4.4 index=2'
-        f'& netsh interface ipv4 set dnsservers name="{interface}" static 1.1.1.1 primary'
-        f'& netsh interface ipv4 add dnsservers name="{interface}" 8.8.4.4 index=2'
+        f'& netsh interface ipv4 set dnsservers name="{interface}" static 8.8.4.4 primary'
+        f'& netsh interface ipv4 add dnsservers name="{interface}" 1.1.1.1 index=2'
     )
 
     result1 = subprocess.run(cmd, shell=True, check=True)
