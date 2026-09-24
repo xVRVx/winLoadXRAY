@@ -47,3 +47,7 @@ py -3.8 -m pip install customtkinter pillow requests pystray pywin32 pyinstaller
 Скачать и распаковать xray: https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-win7-64.zip
 
 Запустить компиляцию.
+
+
+Конфиги лежат тут:
+%APPDATA%\winLoadXRAY
