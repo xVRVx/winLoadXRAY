@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 import base64
@@ -11,7 +10,6 @@ import shutil
 import subprocess
 import winreg
 import re
-import ctypes
 import webbrowser
 import threading
 import time
@@ -30,19 +28,17 @@ except ImportError:
     HAS_TRAY = False
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'func'))
-from parsing import parse_vless, parse_shadowsocks
+from parsing import parse_vless, parse_hy2, parse_node_url
 from configXray import generate_config
-from tun2proxy import get_default_interface, patch_direct_out_interface, start_tun2proxy, stop_tun2proxy
 from copyPast import cmd_copy, cmd_cut, cmd_select_all
 
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.15-beta"
+APP_VERS = "v1.20-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
-tun_enabled = False
 IS_AUTOSTART = "--autostart" in sys.argv
 
 # --- IPC для обработки ссылок winloadxray:// и WAKEUP ---
@@ -68,7 +64,6 @@ def send_url_to_existing_instance(url):
 startup_url = get_url_from_args()
 msg = startup_url if startup_url else "WAKEUP"
 if send_url_to_existing_instance(msg):
-    # Если программа уже открыта, отправляем ей сигнал по сокету и тихо закрываем этот экземпляр
     sys.exit(0) 
 
 BASE_APP_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME)
@@ -82,8 +77,21 @@ active_profile = "Default"
 
 active_tag = None
 proxy_enabled = False
-base64_urls =[]
+base64_urls = []
 configs = {}
+
+# Параметры автообновления
+auto_update_interval = 0  # в часах (0 = отключено)
+last_update_timestamp = 0 # Unix time последнего обновления
+
+# --- Функция логов в GUI (вместо messagebox) ---
+def log_message(text, color="#BDC3C7"):
+    def _update():
+        lbl_status.configure(text=f"• {text}", text_color=color)
+    if threading.current_thread() is threading.main_thread():
+        _update()
+    else:
+        root.after(0, _update)
 
 # --- Инструменты ---
 def sanitize_filename(name):
@@ -100,29 +108,52 @@ def split_flag(tag):
         return tag[0], tag[1:].strip()
     return "", tag
 
-# Определение типа конфига (vless raw, ss, XRAY и т.д.)
+
+    parsed = urlparse(url_str.strip())
+    query = parse_qs(parsed.query)
+    params = {k: v[0] for k, v in query.items() if v}
+    raw_tag = unquote(parsed.fragment) if parsed.fragment else f"Hy2_{parsed.hostname}"
+    tag = sanitize_filename(raw_tag)
+    
+    userinfo = unquote(parsed.username or "")
+    if parsed.password:
+        userinfo = f"{userinfo}:{unquote(parsed.password)}"
+
+    return {
+        "protocol": "hysteria",
+        "network": "hysteria",
+        "address": parsed.hostname,
+        "port": parsed.port or 443,
+        "auth": userinfo,
+        "uuid": userinfo,
+        "tag": tag,
+        **params
+    }
+
+
+# Определение типа конфига (vless raw, hysteria2, XRAY и т.д.)
 def get_config_type(data):
     try:
         if "outbounds" not in data:
-            proto = data.get("protocol", "")
+            proto = data.get("protocol", "").lower()
             if proto == "vless":
                 net = data.get("network", "raw")
                 return f"vless {net}"
-            elif proto == "shadowsocks":
-                return "ss"
+            elif proto in ("hysteria", "hy2", "hysteria2"):
+                return "hysteria2"
         
-        outbounds = data.get("outbounds",[])
+        outbounds = data.get("outbounds", [])
         if not outbounds: return "XRAY"
         if len(outbounds) > 4: return "XRAY"
         
-        proto = outbounds[0].get("protocol", "")
+        proto = outbounds[0].get("protocol", "").lower()
         if proto == "vless":
             net = outbounds[0].get("streamSettings", {}).get("network", "raw")
             return f"vless {net}"
-        elif proto == "shadowsocks":
-            return "ss"
+        elif proto in ("hysteria", "hy2", "hysteria2"):
+            return "hysteria2"
         else:
-            return "XRAY"
+            return proto.upper() if proto else "XRAY"
     except:
         return "XRAY"
 
@@ -131,12 +162,15 @@ def get_sni_from_config(file_path: str) -> str or None:
         with open(file_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         if not ("outbounds" in config and len(config['outbounds']) > 0): return None
-        stream_settings = config['outbounds'][0].get('streamSettings', {})
-        if not stream_settings: return None
-        if 'realitySettings' in stream_settings and stream_settings['realitySettings'].get('serverName'):
-            return stream_settings['realitySettings']['serverName']
-        if 'tlsSettings' in stream_settings and stream_settings['tlsSettings'].get('serverName'):
-            return stream_settings['tlsSettings']['serverName']
+        outbound = config['outbounds'][0]
+        stream_settings = outbound.get('streamSettings', {})
+        if stream_settings:
+            if 'realitySettings' in stream_settings and stream_settings['realitySettings'].get('serverName'):
+                return stream_settings['realitySettings']['serverName']
+            if 'tlsSettings' in stream_settings and stream_settings['tlsSettings'].get('serverName'):
+                return stream_settings['tlsSettings']['serverName']
+        if outbound.get('settings', {}).get('address'):
+            return outbound['settings']['address']
     except: return None
     return None
 
@@ -155,14 +189,16 @@ def http_ping(hostname: str, timeout: int = 3) -> (int, str):
 
 # --- Профили и Файлы ---
 def setup_active_profile(profile_name):
-    global CONFIGS_DIR, LINKS_FILE, STATE_FILE, active_profile, configs, base64_urls
+    global CONFIGS_DIR, LINKS_FILE, STATE_FILE, active_profile, configs, base64_urls, auto_update_interval, last_update_timestamp
     active_profile = profile_name
     CONFIGS_DIR = os.path.join(PROFILES_DIR, profile_name)
     os.makedirs(CONFIGS_DIR, exist_ok=True)
     LINKS_FILE = os.path.join(CONFIGS_DIR, "links.json")
     STATE_FILE = os.path.join(CONFIGS_DIR, "state.json")
     configs.clear()
-    base64_urls =[]
+    base64_urls = []
+    auto_update_interval = 0
+    last_update_timestamp = 0
     
     settings_path = os.path.join(BASE_APP_DIR, "settings.json")
     try:
@@ -171,8 +207,8 @@ def setup_active_profile(profile_name):
     except: pass
 
 def get_profiles():
-    profs =[d for d in os.listdir(PROFILES_DIR) if os.path.isdir(os.path.join(PROFILES_DIR, d))]
-    return profs if profs else["Default"]
+    profs = [d for d in os.listdir(PROFILES_DIR) if os.path.isdir(os.path.join(PROFILES_DIR, d))]
+    return profs if profs else ["Default"]
 
 def load_initial_profile():
     settings_path = os.path.join(BASE_APP_DIR, "settings.json")
@@ -186,20 +222,27 @@ def load_initial_profile():
     setup_active_profile(prof)
 
 def save_state():
-    state = {"active_tag": active_tag, "proxy_enabled": proxy_enabled}
+    state = {
+        "active_tag": active_tag, 
+        "proxy_enabled": proxy_enabled,
+        "update_interval": auto_update_interval,
+        "last_update": last_update_timestamp
+    }
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     except: pass
 
 def load_state(is_initial=False):
-    global active_tag, proxy_enabled
+    global active_tag, proxy_enabled, auto_update_interval, last_update_timestamp
     if not os.path.exists(STATE_FILE): return
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
         active_tag = state.get("active_tag")
         proxy_enabled = state.get("proxy_enabled", False)
+        auto_update_interval = state.get("update_interval", 0)
+        last_update_timestamp = state.get("last_update", 0)
 
         if proxy_enabled:
             toggle_system_proxy()
@@ -213,6 +256,7 @@ def load_state(is_initial=False):
                     global xray_process
                     xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
                     btn_run.configure(text="Остановить конфиг", fg_color="#27AE60", hover_color="#2ECC71")
+                    log_message(f"Конфиг '{active_tag}' запущен", "#2ECC71")
     except: pass
 
 def load_base64_urls():
@@ -233,9 +277,9 @@ def load_base64_urls():
     if os.path.exists(LINKS_FILE):
         with open(LINKS_FILE, "r", encoding="utf-8") as f:
             links = json.load(f)
-        base64_urls = links if isinstance(links, list) else[]
+        base64_urls = links if isinstance(links, list) else []
     else:
-        base64_urls =[]
+        base64_urls = []
         
     entry.delete(0, 'end')
     if base64_urls:
@@ -263,13 +307,15 @@ def toggle_system_proxy(host="127.0.0.1", port=2080):
                 winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)
                 winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"{host}:{port}")
                 proxy_enabled = True
+                log_message("Системный прокси включен", "#2ECC71")
             else:
                 winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
                 proxy_enabled = False
+                log_message("Системный прокси выключен")
         save_state()
         update_proxy_button_color()
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось переключить прокси: {e}")
+        log_message(f"Не удалось переключить прокси: {e}", "#E74C3C")
 
 def stop_system_proxy(is_quitting=False):
     global proxy_enabled
@@ -298,24 +344,29 @@ def paste_and_add():
     except: pass
 
 def add_from_url(is_refresh=False):
-    global base64_urls, active_profile, tun_enabled
+    global base64_urls, active_profile, auto_update_interval, last_update_timestamp
     input_text = entry.get().strip()
-    if not input_text: return
+    if not input_text: 
+        log_message("Поле ввода пусто", "#F39C12")
+        return
 
-    # Принудительно останавливаем все сетевые процессы при обновлении подписки
+    # Запоминаем состояние работающего процесса для бесшовного перезапуска
+    was_running = (xray_process is not None and xray_process.poll() is None)
+    saved_tag = active_tag
+
+    # Принудительно останавливаем процессы перед обновлением
     stop_xray()
     stop_system_proxy()
-    if tun_enabled:
-        vrv_tun_mode_toggle()
 
-    if input_text.startswith("vless://") or input_text.startswith("ss://"):
-        lines =[l.strip() for l in input_text.splitlines() if l.strip()]
+    # Обработка одиночных/нескольких VLESS или HYSTERIA2 ссылок
+    SUPPORTED_SCHEMES = ("vless://", "hy2://", "hysteria2://")
+    if any(input_text.startswith(s) for s in SUPPORTED_SCHEMES):
+        lines = [l.strip() for l in input_text.splitlines() if any(l.strip().startswith(s) for s in SUPPORTED_SCHEMES)]
         added = 0
         for line in lines:
             try:
-                if line.startswith("vless://"): data = parse_vless(line)
-                elif line.startswith("ss://"): data = parse_shadowsocks(line)
-                else: continue
+                data = parse_node_url(line)
+                if not data: continue
                 tag = data["tag"]
                 configs[tag] = data
                 ctype = get_config_type(data)
@@ -325,13 +376,28 @@ def add_from_url(is_refresh=False):
                 added += 1
             except: pass
         if added > 0 and not is_refresh:
-            messagebox.showinfo("Добавлено", f"Добавлено конфигов в текущий профиль: {added}")
+            log_message(f"Добавлено конфигов в профиль: {added}", "#2ECC71")
         return
 
+    # Обработка подписки по ссылке (HTTP/S)
     if input_text.startswith("http"):
         try:
-            r = requests.get(input_text, headers={'User-Agent': f'{APP_NAME}/{APP_VERS}'})
+            log_message("Загрузка подписки...")
+            r = requests.get(input_text, headers={'User-Agent': f'{APP_NAME}/{APP_VERS}'}, timeout=15)
             r.raise_for_status()
+
+            # --- Считываем интервал автообновления строго из заголовка ---
+            interval_hdr = r.headers.get('profile-update-interval')
+            if interval_hdr:
+                match = re.search(r'\d+', str(interval_hdr))
+                if match:
+                    auto_update_interval = int(match.group(0))
+                else:
+                    auto_update_interval = 0
+            else:
+                auto_update_interval = 0
+
+            last_update_timestamp = time.time()
 
             if not is_refresh:
                 prof_name = None
@@ -383,10 +449,12 @@ def add_from_url(is_refresh=False):
             added = 0
             try:
                 decoded = safe_b64decode(r.text)
-                lines =[l.strip() for l in decoded.splitlines() if l.startswith("vless://") or l.startswith("ss://")]
+                # Поддержка vless://, hy2:// и hysteria2:// в подписке
+                lines = [l.strip() for l in decoded.splitlines() if any(l.startswith(s) for s in SUPPORTED_SCHEMES)]
                 for line in lines:
                     try:
-                        data = parse_vless(line) if line.startswith("vless://") else parse_shadowsocks(line)
+                        data = parse_node_url(line)
+                        if not data: continue
                         tag = data["tag"]
                         configs[tag] = data
                         ctype = get_config_type(data)
@@ -399,8 +467,14 @@ def add_from_url(is_refresh=False):
                 clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
                 try:
                     loaded_data = json.loads(clean_content)
-                    items = loaded_data if isinstance(loaded_data, list) else[loaded_data]
+                    items = loaded_data if isinstance(loaded_data, list) else [loaded_data]
                     for config_data in items:
+                        if config_data.get("protocol") == "shadowsocks":
+                            continue
+                        outbounds = config_data.get("outbounds", [])
+                        if outbounds and outbounds[0].get("protocol") == "shadowsocks":
+                            continue
+
                         tag = sanitize_filename(unquote(config_data.get("remarks", config_data.get("tag", f"import_{added}"))))
                         configs[tag] = config_data
                         ctype = get_config_type(config_data)
@@ -409,56 +483,78 @@ def add_from_url(is_refresh=False):
                             json.dump(config_data, cf, indent=2, ensure_ascii=False)
                         added += 1
                 except:
-                    if not is_refresh: messagebox.showerror("Ошибка", "Не удалось распарсить подписку.")
+                    if not is_refresh: 
+                        log_message("Не удалось распарсить подписку", "#E74C3C")
                     return
 
-            if not is_refresh: messagebox.showinfo("Успех", f"Подписка добавлена/обновлена ({added} серверов).")
+            save_state()
+
+            # Восстанавливаем ранее активный конфиг
+            if was_running and saved_tag and saved_tag in configs:
+                config_list.select(saved_tag)
+                run_selected()
+
+            interval_info = f", автообновление: {auto_update_interval}ч" if auto_update_interval > 0 else ""
+            log_message(f"Подписка обновлена ({added} серверов{interval_info})", "#2ECC71")
         except Exception as e:
-            if not is_refresh: messagebox.showerror("Ошибка", f"Не удалось загрузить подписку: {e}")
+            if not is_refresh: 
+                log_message(f"Ошибка загрузки подписки: {e}", "#E74C3C")
         return
-    if not is_refresh: messagebox.showerror("Ошибка", "Неверная ссылка.")
+    if not is_refresh: 
+        log_message("Неверный формат ссылки", "#E74C3C")
 
 def update_all_subscriptions():
     if not base64_urls:
-        messagebox.showinfo("Внимание", "Нет подписок для обновления в этом профиле.")
+        log_message("Нет подписок для обновления в этом профиле", "#F39C12")
         return
     url = base64_urls[0]
     entry.delete(0, 'end')
     entry.insert(0, url)
     add_from_url(is_refresh=True)
-    messagebox.showinfo("Успех", "Подписка успешно обновлена!")
+
+# Фоновая проверка наступления времени автообновления
+def check_auto_update():
+    global auto_update_interval, last_update_timestamp
+    try:
+        if auto_update_interval > 0 and base64_urls:
+            interval_seconds = auto_update_interval * 3600
+            now = time.time()
+            if now - last_update_timestamp >= interval_seconds:
+                log_message(f"Автообновление подписки по расписанию ({auto_update_interval}ч)...")
+                update_all_subscriptions()
+    except Exception:
+        pass
+    finally:
+        # Проверяем каждую минуту (60 000 мс)
+        root.after(60000, check_auto_update)
 
 def run_selected():
     global xray_process
     
     tag = config_list.selected_tag
-    if not tag: return
+    if not tag: 
+        log_message("Конфиг не выбран", "#F39C12")
+        return
 
     # Проверяем, запущен ли сейчас процесс
     if xray_process and xray_process.poll() is None:
-        # Запоминаем, совпадает ли выбранный конфиг с тем, который сейчас работает
         is_same_config = (active_tag == tag)
-        
-        # Останавливаем текущий процесс
         stop_xray()
-        
-        # Если мы нажали на тот же самый конфиг, что и работал, то просто выходим (оставляем выключенным)
         if is_same_config:
             return
-        
-        # А если конфиги разные, код пойдет дальше и сразу запустит новый!
 
     config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
     if not os.path.exists(XRAY_EXE):
-        messagebox.showerror("Ошибка", "Файл xray.exe не найден.")
+        log_message("Файл xray.exe не найден", "#E74C3C")
         return
 
     try:
         xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
         highlight_active(tag)
         btn_run.configure(text="Остановить конфиг", fg_color="#27AE60", hover_color="#2ECC71")
+        log_message(f"Запущен конфиг: {tag}", "#2ECC71")
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось запустить Xray: {e}")
+        log_message(f"Не удалось запустить Xray: {e}", "#E74C3C")
 
 def stop_xray(is_quitting=False):
     global xray_process
@@ -472,6 +568,7 @@ def stop_xray(is_quitting=False):
     if not is_quitting:
         clear_highlight()  
         btn_run.configure(text="Запустить конфиг", fg_color=["#3B8ED0", "#1F6AA5"], hover_color=["#36719F", "#144870"])
+        log_message("Конфиг остановлен")
 
 # --- Управление профилями ---
 def switch_profile(new_profile):
@@ -482,6 +579,7 @@ def switch_profile(new_profile):
     setup_active_profile(new_profile)
     load_base64_urls()
     load_state(is_initial=False)
+    log_message(f"Профиль изменен: {new_profile}")
 
 def add_new_profile():
     dialog = ctk.CTkInputDialog(text="Имя нового профиля:", title="Создать профиль")
@@ -495,29 +593,33 @@ def add_new_profile():
             profile_var.set(name)
             load_base64_urls()
             load_state(is_initial=False)
+            log_message(f"Создан профиль: {name}", "#2ECC71")
 
 def delete_current_profile():
     if len(get_profiles()) <= 1:
-        messagebox.showwarning("Внимание", "Нельзя удалить единственный профиль.")
+        log_message("Нельзя удалить единственный профиль", "#F39C12")
         return
-    confirm = messagebox.askyesno("Удаление", f"Удалить профиль '{active_profile}' со всеми конфигами?")
-    if confirm:
-        stop_xray()
-        stop_system_proxy()
-        try: shutil.rmtree(CONFIGS_DIR)
-        except: pass
-        profs = get_profiles()
-        if not profs: profs = ["Default"]
-        new_prof = profs[0]
-        profile_dropdown.configure(values=profs)
-        profile_var.set(new_prof)
-        switch_profile(new_prof)
+    deleted_name = active_profile
+    stop_xray()
+    stop_system_proxy()
+    try: shutil.rmtree(CONFIGS_DIR)
+    except: pass
+    profs = get_profiles()
+    if not profs: profs = ["Default"]
+    new_prof = profs[0]
+    profile_dropdown.configure(values=profs)
+    profile_var.set(new_prof)
+    switch_profile(new_prof)
+    log_message(f"Профиль '{deleted_name}' удален", "#F39C12")
 
 # --- Рандомный автовыбор ---
 def on_auto_select_click():
     tags = config_list.get_all_tags()
-    if not tags: return
+    if not tags: 
+        log_message("Список серверов пуст", "#F39C12")
+        return
     btn_auto.configure(state="disabled", text="Ищем...")
+    log_message("Проверка доступности серверов...")
 
     def ping_all_task():
         def check_tag(t):
@@ -531,7 +633,7 @@ def on_auto_select_click():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = list(executor.map(check_tag, tags))
 
-        valid_results =[r for r in results if r[1] >= 0]
+        valid_results = [r for r in results if r[1] >= 0]
         best_tag = random.choice(valid_results)[0] if valid_results else None
 
         def update_ui():
@@ -544,6 +646,9 @@ def on_auto_select_click():
                 config_list.select(best_tag)
                 if xray_process and xray_process.poll() is None: stop_xray()
                 run_selected()
+                log_message(f"Выбран случайный рабочий сервер: {best_tag}", "#2ECC71")
+            else:
+                log_message("Не найдено доступных серверов", "#E74C3C")
 
             def finish():
                 btn_auto.configure(state="normal", text="Автовыбор")
@@ -566,6 +671,7 @@ def on_context_ping_click():
         res_str = f"{ms} ms" if ms >= 0 else ("Ошибка" if sni else "No SNI")
         def update_ui():
             config_list.update_ping(tag, res_str)
+            log_message(f"Пинг {tag}: {res_str}")
             root.after(2000, lambda: config_list.update_ping(tag, ""))
         root.after(0, update_ui)
     threading.Thread(target=ping_task, daemon=True).start()
@@ -580,48 +686,12 @@ def on_context_delete_config():
     except: pass
     config_list.delete(tag)
     if tag in configs: del configs[tag]
+    log_message(f"Конфиг '{tag}' удален", "#F39C12")
 
 def show_context_menu(event, tag):
     context_menu.tk_popup(event.x_root, event.y_root)
 
-# --- Доп функции (TUN, Update, Autostart) ---
-def restart_xray_with_active():
-    global xray_process
-    if not active_tag: return
-    config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
-    if not os.path.exists(config_path): return
-    try:
-        xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
-        highlight_active(active_tag)
-        btn_run.configure(text="Остановить конфиг", fg_color="#27AE60", hover_color="#2ECC71")
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось перезапустить Xray: {e}")
-
-def vrv_tun_mode_toggle():
-    global tun_enabled, active_tag
-    if not is_admin(): 
-        run_as_admin()
-        return
-
-    if not tun_enabled:
-        interface = get_default_interface()
-        patch_direct_out_interface(CONFIGS_DIR, interface)
-        
-        saved_tag = active_tag
-        stop_xray()
-        if saved_tag:
-            active_tag = saved_tag
-            restart_xray_with_active()
-            
-        stop_tun2proxy() # Очистка процесса перед стартом для надежности
-        start_tun2proxy(resource_path("tun2proxy/tun2proxy-bin.exe"))
-        btn_tun.configure(text="Выключить TUN", fg_color="#C0392B", hover_color="#E74C3C")
-        tun_enabled = True
-    else:
-        stop_tun2proxy()
-        btn_tun.configure(text="Включить TUN", fg_color=["#3B8ED0", "#1F6AA5"], hover_color=["#36719F", "#144870"])
-        tun_enabled = False
-
+# --- Доп функции (Update, Autostart) ---
 def check_latest_version():
     try:
         response = requests.get("https://api.github.com/repos/xVRVx/winLoadXRAY/releases/latest", timeout=10)
@@ -705,8 +775,9 @@ def add_to_startup(app_name=APP_NAME, path=None):
         )
         winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, path)
         winreg.CloseKey(key)
+        log_message("Автозапуск включен", "#2ECC71")
     except Exception as e:
-        print("Ошибка добавления в автозапуск:", e)
+        log_message(f"Ошибка автозапуска: {e}", "#E74C3C")
 
 def remove_from_startup(app_name=APP_NAME):
     try:
@@ -717,35 +788,17 @@ def remove_from_startup(app_name=APP_NAME):
         )
         winreg.DeleteValue(key, app_name)
         winreg.CloseKey(key)
+        log_message("Автозапуск выключен")
     except FileNotFoundError:
         pass
     except Exception as e:
-        print("Ошибка удаления из автозапуска:", e)
+        log_message(f"Ошибка удаления автозапуска: {e}", "#E74C3C")
 
 def toggle_startup():
     if startup_var.get():
         add_to_startup()
     else:
         remove_from_startup()
-
-def is_admin():
-    try: return ctypes.windll.shell32.IsUserAnAdmin()
-    except: return False
-
-def run_as_admin():
-    try:
-        exe_path = get_executable_path()
-        if exe_path.endswith('.py'):
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{exe_path}"', None, 1)
-        else:
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, "", None, 1)
-        
-        save_state()
-        stop_xray(is_quitting=True)
-        stop_system_proxy(is_quitting=True)
-        os._exit(0) # Убиваем жестко, чтобы потоки трея не зависали
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось получить права администратора: {e}")
 
 def open_link(event): webbrowser.open_new("https://t.me/SkyBridge_VPN_bot")
 def github(event): webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/")
@@ -772,7 +825,6 @@ def register_url_protocol():
         pass
 
 def _restore_window():
-    # Полностью восстанавливаем окно (включая возврат на панель задач)
     root.deiconify()
     root.wm_state('normal')
     root.attributes('-topmost', True)
@@ -915,8 +967,8 @@ class ConfigList(ctk.CTkScrollableFrame):
 
 root = ctk.CTk()
 root.title(f"{APP_NAME} {APP_VERS} {XRAY_VERS}")
-root.geometry("500x450") 
-root.minsize(500, 450)
+root.geometry("500x480") 
+root.minsize(500, 480)
 root.iconbitmap(resource_path("img/icon.ico"))
 
 root.configure(fg_color=MAIN_BG_COLOR)
@@ -948,9 +1000,9 @@ ctk.CTkButton(frame_prof, text="-", width=30, fg_color="#E74C3C", hover_color="#
 # Строка ввода
 frame_entry = ctk.CTkFrame(content_frame, fg_color="transparent")
 frame_entry.pack(fill="x", pady=(0, 10))
-entry = ctk.CTkEntry(frame_entry, placeholder_text="URL подписки или конфиг...")
+entry = ctk.CTkEntry(frame_entry, placeholder_text="URL подписки, vless или hy2 конфиг...")
 entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-ToolTip(entry, "Вставьте сюда URL подписки или конфига XRAY")
+ToolTip(entry, "Вставьте сюда URL подписки или конфиг (vless://, hy2://)")
 
 img_paste = ctk.CTkImage(Image.open(resource_path("img/ref.png")), size=(20, 20))
 btn_paste = ctk.CTkButton(frame_entry, image=img_paste, text="", width=30, command=paste_and_add)
@@ -989,13 +1041,13 @@ btn_auto = ctk.CTkButton(frame_btns2, text="Автовыбор", width=100, comm
 btn_auto.pack(side="left", padx=(15, 5))
 ToolTip(btn_auto, "Случайный выбор")
 
-btn_tun = ctk.CTkButton(frame_btns2, text="Включить TUN", width=120, command=vrv_tun_mode_toggle)
-btn_tun.pack(side="right")
-ToolTip(btn_tun, "Только от имени Администратора! Ожидание VPN 30 сек!\nСоздается виртуальная сетевая карта.")
+# --- СТРОКА СТАТУСА / ЛОГОВ ---
+lbl_status = ctk.CTkLabel(content_frame, text="• Программа готова к работе", anchor="w", text_color="#BDC3C7", font=("Arial", 11))
+lbl_status.pack(fill="x", pady=(6, 2))
 
 # Ссылки 
 frame_links = ctk.CTkFrame(content_frame, fg_color="transparent")
-frame_links.pack(fill="x", pady=(10, 0))
+frame_links.pack(fill="x", pady=(5, 0))
 lbl_tg = ctk.CTkLabel(frame_links, text="Наш Telegram бот", cursor="hand2", text_color="#3498db")
 lbl_tg.pack(side="left", padx=(0, 10))
 lbl_tg.bind("<Button-1>", open_link)
@@ -1010,13 +1062,12 @@ lbl_gh.bind("<Button-1>", github)
 def actual_quit():
     stop_xray(is_quitting=True)
     stop_system_proxy(is_quitting=True)
-    stop_tun2proxy()
     root.destroy()
-    os._exit(0) # Жесткий выход для завершения всех фоновых потоков (в т.ч. трея)
+    os._exit(0)
 
 def on_closing():
     if HAS_TRAY:
-        root.withdraw() # Скрываем программу в системный трей вместо закрытия
+        root.withdraw()
     else:
         actual_quit()
 
@@ -1047,14 +1098,11 @@ try:
     import win32con
 
     def _windows_shutdown_handler(ctrl_type):
-        # Если пришел сигнал на выключение ПК, перезагрузку или выход пользователя
         if ctrl_type in (win32con.CTRL_SHUTDOWN_EVENT, win32con.CTRL_LOGOFF_EVENT):
-            # Вызываем твою родную функцию закрытия (она выключит прокси и Xray)
             actual_quit() 
             return True
         return False
 
-    # Регистрируем слушатель системных событий Windows
     win32api.SetConsoleCtrlHandler(_windows_shutdown_handler, True)
 except ImportError:
     pass 
@@ -1076,11 +1124,14 @@ if startup_url:
 
 if IS_AUTOSTART:
     if HAS_TRAY:
-        root.withdraw() # Полностью скрываем с панели задач
+        root.withdraw()
     else:
         root.iconify()
 
 root.after(3000, check_latest_version)
+
+# Запуск таймера проверки автообновления подписки
+root.after(10000, check_auto_update)
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
 root.mainloop()

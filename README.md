@@ -1,17 +1,12 @@
 # winLoadXRAY ВПН клиент для Windows
-VPN приложение для vless raw reality и голых конфигов ядра XRAY на Windows 10/11.
+VPN приложение для vless raw/xhttp reality/tls, hy2 и голых конфигов ядра XRAY на Windows 7/10/11.
 
-По сути это python обертка вокруг готового [ядра XRAY](https://github.com/XTLS/Xray-core) для win64, также используется [tun2proxy](https://github.com/tun2proxy/tun2proxy) для tun режима.
+По сути это python обертка вокруг готового [ядра XRAY](https://github.com/XTLS/Xray-core)
 
-**Умеет**
-- парсить подписку и запускать vless raw reality, shadowsocks и xhttp reality в mode:auto
-- парсить голый vless:// и ss://
-- парсить чистый конфиг xray для клиента.
 
 **Запускает**
 - socks5 прокси на 2080 порту
-- системный прокси **(рекомендован для браузеров)**
-- tun режим (от администратора)
+- системный прокси
 
 
 ## Внимание! Предустановлен роутинг для ru зоны, ru сайты в direct.
@@ -20,13 +15,13 @@ VPN приложение для vless raw reality и голых конфигов
 
 Зависимости: pip install pillow requests pyinstaller customtkinter pystray pywin32
 
-Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray, скачайте последнюю вресию [tun2proxy](https://github.com/tun2proxy/tun2proxy) и положите в папку tun2proxy
+Скачайте последнюю версию ядра [XRAY](https://github.com/XTLS/Xray-core/releases) для Windows64 и положите в папку xray
 ```bash
 cd C:\Xray-windows-64 && python winLoadXRAY.py
 ```
 **Сборка**
 ```bash
-pyinstaller --onefile --windowed --icon=img/icon.ico --add-binary "xray/xray.exe;xray" --add-binary "xray/geoip.dat;xray" --add-binary "xray/geosite.dat;xray" --add-data "img/ico.png;img" --add-data "img/ref.png;img" --add-data "img/icon.ico;img" --add-data "img/logo.png;img" --add-data "tun2proxy/tun2proxy-bin.exe;tun2proxy" --add-data "tun2proxy/tun2proxy.dll;tun2proxy" --add-data "tun2proxy/wintun.dll;tun2proxy" --add-data "tun2proxy/udpgw-server.exe;tun2proxy" --add-data "func;func" winLoadXRAY.py
+cd C:\Xray-windows-64 && pyinstaller --clean --onefile --windowed --icon=img/icon.ico --add-binary "xray/xray.exe;xray" --add-binary "xray/geoip.dat;xray" --add-binary "xray/geosite.dat;xray" --add-data "img/ico.png;img" --add-data "img/ref.png;img" --add-data "img/icon.ico;img" --add-data "img/logo.png;img" --add-data "func;func" winLoadXRAY.py
 ```
 
 
@@ -34,8 +29,6 @@ pyinstaller --onefile --windowed --icon=img/icon.ico --add-binary "xray/xray.exe
 
 https://github.com/XTLS/Xray-core/releases/download/v25.10.15/Xray-windows-64.zip
 
-
-https://github.com/tun2proxy/tun2proxy/releases/download/v0.7.16/tun2proxy-x86_64-pc-windows-msvc.zip
 
 **Скриншот**
 
@@ -48,9 +41,9 @@ https://github.com/tun2proxy/tun2proxy/releases/download/v0.7.16/tun2proxy-x86_6
 cd C:\xray_win7 && py -3.8 -m venv venv_win7
 venv_win7\Scripts\activate.bat
 python --version
-python -m pip install --upgrade pip
-pip install customtkinter pillow requests pystray pyinstaller pywin32
+py -3.8 -m pip install --upgrade pip
+py -3.8 -m pip install customtkinter pillow requests pystray pywin32 pyinstaller
 ```
-Скачать и распокавать xray: https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-win7-64.zip
+Скачать и распаковать xray: https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-win7-64.zip
 
 Запустить компиляцию.
