@@ -1,72 +1,72 @@
-from urllib.parse import urlparse, parse_qs, unquote
-import base64
 import re
+from urllib.parse import urlparse, parse_qs, unquote
 
-def sanitize_filename(name):
-    # Удаляем недопустимые символы для имени файла в Windows
-    return re.sub(r'[<>:"/\\|?*]', '_', name)
+def sanitize_filename(name: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]', '_', name).strip()
 
-# --- Парсинг VLESS-ссылки ---
-def parse_vless(url):
+def parse_vless(url: str) -> dict:
+    url = url.strip()
     parsed = urlparse(url)
-    uuid = parsed.username
-    address = parsed.hostname
-    port = int(parsed.port)
-    params = parse_qs(parsed.query)
-    tag = parsed.fragment or f"{address}:{port}"
-    tag = unquote(tag)  # Декодируем emoji и кириллицу
+    
+    uuid = unquote(parsed.username or "")
+    address = parsed.hostname or ""
+    port = parsed.port or 443
+    
+    tag = unquote(parsed.fragment) if parsed.fragment else f"{address}:{port}"
     tag = sanitize_filename(tag)
-
+    
+    query = parse_qs(parsed.query)
+    params = {k: v[0] for k, v in query.items() if v}
+    
     return {
         "protocol": "vless",
         "uuid": uuid,
         "address": address,
         "port": port,
-        "security": params.get("security", ["reality"])[0],
-        "network": params.get("type", ["raw"])[0],
-        "headerType": params.get("headerType", [""])[0],
-        "path": params.get("path", [""])[0],
-        "host": params.get("host", [""])[0],
-        "flow": params.get("flow", [""])[0],
-        "sni": params.get("sni", [""])[0],
-        "fp": params.get("fp", ["chrome"])[0],
-        "pbk": params.get("pbk", [""])[0],
-        "sid": params.get("sid", [""])[0],
-        "spx": params.get("spx", ["/"])[0],
-
-            "extra": params.get("extra", [""])[0],
-            "mode": params.get("mode", ["auto"])[0],
-
-        "pqv": params.get("pqv", [""])[0],
-        "tag": tag
+        "tag": tag,
+        "network": params.get("type", "raw"),
+        "security": params.get("security", "none"),
+        "flow": params.get("flow", ""),
+        "sni": params.get("sni", ""),
+        "fp": params.get("fp", "chrome"),
+        "pbk": params.get("pbk", ""),
+        "sid": params.get("sid", ""),
+        "spx": params.get("spx", "/"),
+        "path": params.get("path", "/"),
+        "mode": params.get("mode", "auto"),
+        "extra": params.get("extra", ""),
+        "headerType": params.get("headerType", "none"),
+        "alpn": params.get("alpn", "")
     }
 
-# --- Парсинг SS-ссылки ---
-def parse_shadowsocks(url):
-    assert url.startswith("ss://")
-    url = url[5:]
-
-    if "#" in url:
-        url, tag = url.split("#", 1)
-        tag = unquote(tag)
-    else:
-        tag = "ss_config"
-
-    if "@" in url:
-        base64_part, address_part = url.split("@", 1)
-        padded = base64_part + '=' * (-len(base64_part) % 4)
-        decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
-        method, password = decoded.split(":", 1)
-        server, port = address_part.split(":")
-    else:
-        raise ValueError("Некорректный формат Shadowsocks ссылки")
+def parse_hy2(url: str) -> dict:
+    url = url.strip()
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    params = {k: v[0] for k, v in query.items() if v}
+    
+    raw_tag = unquote(parsed.fragment) if parsed.fragment else f"Hy2_{parsed.hostname}"
+    tag = sanitize_filename(raw_tag)
+    
+    userinfo = unquote(parsed.username or "")
+    if parsed.password:
+        userinfo = f"{userinfo}:{unquote(parsed.password)}"
 
     return {
-        "protocol": "shadowsocks",
+        "protocol": "hysteria",
+        "network": "hysteria",
+        "address": parsed.hostname or "",
+        "port": parsed.port or 443,
+        "auth": userinfo,
+        "uuid": userinfo,
         "tag": tag,
-        "server": server,
-        "port": int(port),
-        "method": method,
-        "password": password
+        **params
     }
 
+def parse_node_url(line: str) -> dict or None:
+    line = line.strip()
+    if line.startswith("vless://"):
+        return parse_vless(line)
+    elif line.startswith("hy2://") or line.startswith("hysteria2://"):
+        return parse_hy2(line)
+    return None
