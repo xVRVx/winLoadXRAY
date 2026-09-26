@@ -35,7 +35,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.20-beta"
+APP_VERS = "v1.22-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
@@ -343,6 +343,7 @@ def paste_and_add():
         add_from_url()
     except: pass
 
+
 def add_from_url(is_refresh=False):
     global base64_urls, active_profile, auto_update_interval, last_update_timestamp
     input_text = entry.get().strip()
@@ -350,17 +351,15 @@ def add_from_url(is_refresh=False):
         log_message("Поле ввода пусто", "#F39C12")
         return
 
-    # Запоминаем состояние работающего процесса для бесшовного перезапуска
+    # Запоминаем состояние работающего процесса
     was_running = (xray_process is not None and xray_process.poll() is None)
     saved_tag = active_tag
 
-    # Принудительно останавливаем процессы перед обновлением
-    stop_xray()
-    stop_system_proxy()
-
-    # Обработка одиночных/нескольких VLESS или HYSTERIA2 ссылок
+    # Обработка одиночных/нескольких VLESS или HYSTERIA2 ссылок (ручной ввод)
     SUPPORTED_SCHEMES = ("vless://", "hy2://", "hysteria2://")
     if any(input_text.startswith(s) for s in SUPPORTED_SCHEMES):
+        stop_xray()
+        stop_system_proxy()
         lines = [l.strip() for l in input_text.splitlines() if any(l.strip().startswith(s) for s in SUPPORTED_SCHEMES)]
         added = 0
         for line in lines:
@@ -382,21 +381,22 @@ def add_from_url(is_refresh=False):
     # Обработка подписки по ссылке (HTTP/S)
     if input_text.startswith("http"):
         try:
-            log_message("Загрузка подписки...")
+            if not is_refresh:
+                log_message("Загрузка подписки...")
+            
+            # Скачиваем подписку (VPN в этот момент НЕ отключаем!)
             r = requests.get(input_text, headers={'User-Agent': f'{APP_NAME}/{APP_VERS}'}, timeout=15)
             r.raise_for_status()
 
-            # --- Считываем интервал автообновления строго из заголовка ---
+            # Считываем интервал автообновления строго из заголовка
             interval_hdr = r.headers.get('profile-update-interval')
             if interval_hdr:
                 match = re.search(r'\d+', str(interval_hdr))
-                if match:
-                    auto_update_interval = int(match.group(0))
-                else:
-                    auto_update_interval = 0
+                auto_update_interval = int(match.group(0)) if match else 0
             else:
                 auto_update_interval = 0
 
+            # Успешно скачали — обновляем метку времени
             last_update_timestamp = time.time()
 
             if not is_refresh:
@@ -442,6 +442,10 @@ def add_from_url(is_refresh=False):
                     setup_active_profile(prof_name)
                     profile_var.set(prof_name)
 
+            # Теперь, когда данные гарантированно на руках, безопасно останавливаем старый процесс
+            stop_xray()
+            stop_system_proxy()
+
             clear_xray_configs()
             base64_urls = [input_text]
             save_base64_urls()
@@ -449,7 +453,6 @@ def add_from_url(is_refresh=False):
             added = 0
             try:
                 decoded = safe_b64decode(r.text)
-                # Поддержка vless://, hy2:// и hysteria2:// в подписке
                 lines = [l.strip() for l in decoded.splitlines() if any(l.startswith(s) for s in SUPPORTED_SCHEMES)]
                 for line in lines:
                     try:
@@ -485,6 +488,8 @@ def add_from_url(is_refresh=False):
                 except:
                     if not is_refresh: 
                         log_message("Не удалось распарсить подписку", "#E74C3C")
+                    else:
+                        log_message("Сбой парсинга подписки", "#E74C3C")
                     return
 
             save_state()
@@ -496,12 +501,25 @@ def add_from_url(is_refresh=False):
 
             interval_info = f", автообновление: {auto_update_interval}ч" if auto_update_interval > 0 else ""
             log_message(f"Подписка обновлена ({added} серверов{interval_info})", "#2ECC71")
+
         except Exception as e:
-            if not is_refresh: 
+            # === ЕСЛИ СЕРВЕР НЕДОСТУПЕН ===
+            # Переносим таймер на полный интервал вперед
+            last_update_timestamp = time.time()
+            save_state()
+
+            retry_text = f", повтор через {auto_update_interval}ч" if auto_update_interval > 0 else ""
+            if is_refresh:
+                log_message(f"Сервер подписки недоступен{retry_text}", "#F39C12")
+            else:
                 log_message(f"Ошибка загрузки подписки: {e}", "#E74C3C")
         return
+
     if not is_refresh: 
         log_message("Неверный формат ссылки", "#E74C3C")
+
+
+
 
 def update_all_subscriptions():
     if not base64_urls:
@@ -691,18 +709,126 @@ def on_context_delete_config():
 def show_context_menu(event, tag):
     context_menu.tk_popup(event.x_root, event.y_root)
 
+
+def parse_version(v_str):
+    """Преобразует строку версии вида 'v1.20-beta' в кортеж чисел (1, 20) для корректного сравнения"""
+    nums = re.findall(r'\d+', str(v_str))
+    return tuple(map(int, nums)) if nums else (0,)
+
+def download_and_install_update(download_url, new_version):
+    """Фоновое скачивание и безопасный перезапуск для PyInstaller --onefile"""
+    def _worker():
+        try:
+            current_exe = get_executable_path()
+            
+            if not getattr(sys, 'frozen', False):
+                log_message(f"Обновление {new_version} доступно (в режиме .py автозамена отключена)", "#F39C12")
+                return
+
+            log_message(f"Скачивание обновления {new_version}...", "#3498DB")
+            temp_exe = current_exe + ".new"
+
+            with requests.get(download_url, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                with open(temp_exe, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+
+            log_message("Установка и перезапуск...", "#2ECC71")
+            time.sleep(0.5)
+
+            # === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ДЛЯ PYINSTALLER --ONEFILE ===
+            # Полностью вычищаем служебные переменные старого процесса
+            clean_env = os.environ.copy()
+            for key in list(clean_env.keys()):
+                if key.startswith(("_PYI", "_MEI")):
+                    clean_env.pop(key, None)
+            
+            # Сообщаем новому загрузчику, что это чистый запуск с нуля
+            clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+
+            # Команда CMD:
+            # 1. Задаем переменную внутри CMD на случай сбоя наследования
+            # 2. Ждем 3 секунды (ping -n 3), пока старый .exe полностью выгрузится из RAM и снимет блокировку
+            # 3. Перезаписываем файл
+            # 4. Запускаем обновленный .exe
+            cmd = (
+                f'set PYINSTALLER_RESET_ENVIRONMENT=1 & '
+                f'ping 127.0.0.1 -n 3 > nul & '
+                f'move /y "{temp_exe}" "{current_exe}" & '
+                f'start "" "{current_exe}"'
+            )
+
+            subprocess.Popen(
+                cmd,
+                shell=True,
+                env=clean_env, # <-- Передаем очищенное окружение
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+
+            # Корректно завершаем приложение (гасим xray и возвращаем настройки прокси)
+            root.after(100, actual_quit)
+
+        except Exception as e:
+            log_message(f"Ошибка обновления: {e}", "#E74C3C")
+            temp_exe = get_executable_path() + ".new"
+            if os.path.exists(temp_exe):
+                try: os.remove(temp_exe)
+                except: pass
+
+    threading.Thread(target=_worker, daemon=True).start()
+
 # --- Доп функции (Update, Autostart) ---
 def check_latest_version():
-    try:
-        response = requests.get("https://api.github.com/repos/xVRVx/winLoadXRAY/releases/latest", timeout=10)
-        response.raise_for_status()
-        latest_version = response.json().get("tag_name", "")
-        if latest_version and latest_version != APP_VERS:
-            update_link = ctk.CTkLabel(frame_links, text=f"Доступна: {latest_version}", text_color="#F1C40F", cursor="hand2", font=("Arial", 12, "underline"))
-            ToolTip(update_link, "Замените: "+ get_executable_path())
-            update_link.pack(side="right", padx=0)
-            update_link.bind("<Button-1>", lambda e: webbrowser.open_new("https://github.com/xVRVx/winLoadXRAY/releases/"))
-    except: pass
+    def _check():
+        try:
+            url = "https://api.github.com/repos/xVRVx/winLoadXRAY/releases/latest"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            release_data = response.json()
+            
+            latest_version = release_data.get("tag_name", "")
+            if not latest_version:
+                return
+
+            # Сравниваем версии математически
+            if parse_version(latest_version) > parse_version(APP_VERS):
+                # Ищем .exe файл среди ассетов релиза
+                download_url = None
+                for asset in release_data.get("assets", []):
+                    name = asset.get("name", "").lower()
+                    if name.endswith(".exe"):
+                        download_url = asset.get("browser_download_url")
+                        break
+                
+                if not download_url:
+                    return
+
+                def _show_ui():
+                    # Создаем аккуратную кнопку прямо в интерфейсе
+                    btn_update = ctk.CTkButton(
+                        frame_links,
+                        text=f"Обновить до {latest_version}",
+                        fg_color="#F39C12",
+                        hover_color="#D68910",
+                        text_color="white",
+                        height=22,
+                        font=("Arial", 11, "bold"),
+                        command=lambda: download_and_install_update(download_url, latest_version)
+                    )
+                    btn_update.pack(side="right", padx=5)
+                    ToolTip(btn_update, f"Нажмите для автоматического обновления на версию {latest_version}")
+
+                root.after(0, _show_ui)
+
+        except Exception:
+            pass
+
+    threading.Thread(target=_check, daemon=True).start()
+
+
+
 
 # --- Остальные утилиты ---
 def highlight_active(tag):
