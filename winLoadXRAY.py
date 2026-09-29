@@ -35,7 +35,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.22-beta"
+APP_VERS = "v1.23-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
@@ -794,13 +794,41 @@ def check_latest_version():
 
             # Сравниваем версии математически
             if parse_version(latest_version) > parse_version(APP_VERS):
-                # Ищем .exe файл среди ассетов релиза
+                # Определяем, какая версия нужна (Windows 7/8 или Windows 10/11)
+                is_win7 = False
+                if sys.platform == "win32":
+                    try:
+                        # У Windows 7/8 major-версия < 10 (Win 7 = 6.1, Win 8.1 = 6.3)
+                        is_win7 = sys.getwindowsversion().major < 10
+                    except Exception:
+                        pass
+
+                current_exe_name = os.path.basename(get_executable_path()).lower()
+                if "win7" in current_exe_name:
+                    is_win7 = True
+
                 download_url = None
+                fallback_url = None
+
+                # Ищем подходящий .exe среди ассетов релиза
                 for asset in release_data.get("assets", []):
                     name = asset.get("name", "").lower()
-                    if name.endswith(".exe"):
+                    if not name.endswith(".exe"):
+                        continue
+
+                    # Запасной вариант на случай нестандартных названий
+                    if not fallback_url:
+                        fallback_url = asset.get("browser_download_url")
+
+                    if is_win7 and "win7" in name:
                         download_url = asset.get("browser_download_url")
                         break
+                    elif not is_win7 and "win7" not in name:
+                        download_url = asset.get("browser_download_url")
+                        break
+
+                # Если точного совпадения по маске не нашлось, берём fallback
+                download_url = download_url or fallback_url
                 
                 if not download_url:
                     return
