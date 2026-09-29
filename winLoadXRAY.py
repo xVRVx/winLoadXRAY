@@ -35,7 +35,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.23-beta"
+APP_VERS = "v1.24-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
@@ -108,29 +108,6 @@ def split_flag(tag):
         return tag[0], tag[1:].strip()
     return "", tag
 
-
-    parsed = urlparse(url_str.strip())
-    query = parse_qs(parsed.query)
-    params = {k: v[0] for k, v in query.items() if v}
-    raw_tag = unquote(parsed.fragment) if parsed.fragment else f"Hy2_{parsed.hostname}"
-    tag = sanitize_filename(raw_tag)
-    
-    userinfo = unquote(parsed.username or "")
-    if parsed.password:
-        userinfo = f"{userinfo}:{unquote(parsed.password)}"
-
-    return {
-        "protocol": "hysteria",
-        "network": "hysteria",
-        "address": parsed.hostname,
-        "port": parsed.port or 443,
-        "auth": userinfo,
-        "uuid": userinfo,
-        "tag": tag,
-        **params
-    }
-
-
 # Определение типа конфига (vless reality, vless tls, hysteria2 и т.д.)
 def get_config_type(data):
     try:
@@ -179,10 +156,8 @@ def get_config_type(data):
         # VLESS
         if proto == "vless":
             if sec in ("reality", "tls"):
-                # Если сеть стандартная (tcp/raw), выводим компактно: "vless reality" или "vless tls"
                 if net in ("raw", "tcp", ""):
                     return f"vless {sec}"
-                # Если нестандартный транспорт (например, ws, grpc): "vless grpc reality", "vless ws tls"
                 return f"vless {net} {sec}"
             return f"vless {net}"
 
@@ -199,11 +174,6 @@ def get_config_type(data):
         return "XRAY"
     except:
         return "XRAY"
-
-
-
-
-
 
 def get_sni_from_config(file_path: str) -> str or None:
     try:
@@ -391,7 +361,6 @@ def paste_and_add():
         add_from_url()
     except: pass
 
-
 def add_from_url(is_refresh=False):
     global base64_urls, active_profile, auto_update_interval, last_update_timestamp
     input_text = entry.get().strip()
@@ -565,9 +534,6 @@ def add_from_url(is_refresh=False):
 
     if not is_refresh: 
         log_message("Неверный формат ссылки", "#E74C3C")
-
-
-
 
 def update_all_subscriptions():
     if not base64_urls:
@@ -757,7 +723,6 @@ def on_context_delete_config():
 def show_context_menu(event, tag):
     context_menu.tk_popup(event.x_root, event.y_root)
 
-
 def parse_version(v_str):
     """Преобразует строку версии вида 'v1.20-beta' в кортеж чисел (1, 20) для корректного сравнения"""
     nums = re.findall(r'\d+', str(v_str))
@@ -786,21 +751,13 @@ def download_and_install_update(download_url, new_version):
             log_message("Установка и перезапуск...", "#2ECC71")
             time.sleep(0.5)
 
-            # === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ДЛЯ PYINSTALLER --ONEFILE ===
-            # Полностью вычищаем служебные переменные старого процесса
             clean_env = os.environ.copy()
             for key in list(clean_env.keys()):
                 if key.startswith(("_PYI", "_MEI")):
                     clean_env.pop(key, None)
             
-            # Сообщаем новому загрузчику, что это чистый запуск с нуля
             clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
 
-            # Команда CMD:
-            # 1. Задаем переменную внутри CMD на случай сбоя наследования
-            # 2. Ждем 3 секунды (ping -n 3), пока старый .exe полностью выгрузится из RAM и снимет блокировку
-            # 3. Перезаписываем файл
-            # 4. Запускаем обновленный .exe
             cmd = (
                 f'set PYINSTALLER_RESET_ENVIRONMENT=1 & '
                 f'ping 127.0.0.1 -n 3 > nul & '
@@ -811,11 +768,10 @@ def download_and_install_update(download_url, new_version):
             subprocess.Popen(
                 cmd,
                 shell=True,
-                env=clean_env, # <-- Передаем очищенное окружение
+                env=clean_env,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
-            # Корректно завершаем приложение (гасим xray и возвращаем настройки прокси)
             root.after(100, actual_quit)
 
         except Exception as e:
@@ -842,11 +798,9 @@ def check_latest_version():
 
             # Сравниваем версии математически
             if parse_version(latest_version) > parse_version(APP_VERS):
-                # Определяем, какая версия нужна (Windows 7/8 или Windows 10/11)
                 is_win7 = False
                 if sys.platform == "win32":
                     try:
-                        # У Windows 7/8 major-версия < 10 (Win 7 = 6.1, Win 8.1 = 6.3)
                         is_win7 = sys.getwindowsversion().major < 10
                     except Exception:
                         pass
@@ -858,13 +812,11 @@ def check_latest_version():
                 download_url = None
                 fallback_url = None
 
-                # Ищем подходящий .exe среди ассетов релиза
                 for asset in release_data.get("assets", []):
                     name = asset.get("name", "").lower()
                     if not name.endswith(".exe"):
                         continue
 
-                    # Запасной вариант на случай нестандартных названий
                     if not fallback_url:
                         fallback_url = asset.get("browser_download_url")
 
@@ -875,14 +827,11 @@ def check_latest_version():
                         download_url = asset.get("browser_download_url")
                         break
 
-                # Если точного совпадения по маске не нашлось, берём fallback
                 download_url = download_url or fallback_url
-                
                 if not download_url:
                     return
 
                 def _show_ui():
-                    # Создаем аккуратную кнопку прямо в интерфейсе
                     btn_update = ctk.CTkButton(
                         frame_links,
                         text=f"Обновить до {latest_version}",
@@ -903,10 +852,6 @@ def check_latest_version():
 
     threading.Thread(target=_check, daemon=True).start()
 
-
-
-
-# --- Остальные утилиты ---
 def highlight_active(tag):
     global active_tag
     active_tag = tag
@@ -919,6 +864,7 @@ def clear_highlight():
     save_state()
     config_list.update_colors()
 
+# --- Всплывающие подсказки ---
 class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget
@@ -928,14 +874,29 @@ class ToolTip:
         self.widget.bind("<Leave>", self.hide_tip)
 
     def show_tip(self, event=None):
-        if self.tipwindow or not self.text: return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        if self.tipwindow: return
+        content = self.text() if callable(self.text) else self.text
+        if not content: return
+
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True) 
+        label = tk.Label(tw, text=content, background="#ffffe0", relief="solid", borderwidth=1, font=("tahoma", "8", "normal"), justify="left")
+        label.pack(ipadx=6, ipady=4)
+
+        tw.update_idletasks()
+        tip_w = tw.winfo_reqwidth()
+        screen_w = tw.winfo_screenwidth()
+
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+
+        # Предотвращаем вылет тултипа за пределы экрана справа
+        if x + tip_w > screen_w - 10:
+            x = screen_w - tip_w - 10
+        if x < 10:
+            x = 10
+
         tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(tw, text=self.text, background="#ffffe0", relief="solid", borderwidth=1, font=("tahoma", "8", "normal"))
-        label.pack(ipadx=4, ipady=2)
 
     def hide_tip(self, event=None):
         if self.tipwindow:
@@ -951,6 +912,26 @@ CREATE_NO_WINDOW = 0x08000000
 
 def get_executable_path():
     return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+
+def open_configs_folder():
+    """Открывает папку с конфигами в Проводнике Windows"""
+    try:
+        target_dir = CONFIGS_DIR if os.path.exists(CONFIGS_DIR) else BASE_APP_DIR
+        os.startfile(target_dir)
+    except Exception as e:
+        log_message(f"Не удалось открыть папку: {e}", "#E74C3C")
+
+def get_path_tooltip():
+    """Формирует текст подсказки с путями"""
+    tag = active_tag or getattr(config_list, 'selected_tag', None)
+    lines = []
+    if tag:
+        file_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
+        lines.append(f"Файл конфига:\n{file_path}\n")
+    lines.append(f"Папка профиля:\n{CONFIGS_DIR}\n")
+    lines.append(f"Исполняемый файл:\n{get_executable_path()}\n")
+    lines.append("(Нажмите, чтобы открыть папку в Проводнике)")
+    return "\n".join(lines)
 
 def is_in_startup(app_name=APP_NAME):
     try:
@@ -1060,14 +1041,12 @@ def start_ipc_server():
             pass
     threading.Thread(target=_server, daemon=True).start()
 
-
 # ==========================================
 # ====== НАСТРОЙКА ЦВЕТОВ ПРОГРАММЫ ========
 # ==========================================
 MAIN_BG_COLOR = "#102236"  # Основной цвет программы (темно-синий)
 LIST_BG_COLOR = "#1a1a1a"  # Цвет поля со списком конфигов (темный/графит)
 # ==========================================
-
 
 class ConfigList(ctk.CTkScrollableFrame):
     def __init__(self, master, command=None, right_click_command=None, **kwargs):
@@ -1166,7 +1145,7 @@ class ConfigList(ctk.CTkScrollableFrame):
 
     def get_all_tags(self): return list(self.rows.keys())
 
-
+# --- Построение основного окна GUI ---
 root = ctk.CTk()
 root.title(f"{APP_NAME} {APP_VERS} {XRAY_VERS}")
 root.geometry("500x480") 
@@ -1224,7 +1203,7 @@ context_menu.add_command(label="Удалить конфиг", command=on_context
 config_list = ConfigList(content_frame, fg_color=LIST_BG_COLOR, right_click_command=show_context_menu, width=400, height=150)
 config_list.pack(fill="both", expand=True, pady=(0, 5))
 
-# Кнопки управления
+# Кнопки управления (Строка 1)
 frame_btns1 = ctk.CTkFrame(content_frame, fg_color="transparent")
 frame_btns1.pack(fill="x", pady=(15, 10))
 btn_run = ctk.CTkButton(frame_btns1, text="Запустить конфиг", command=run_selected)
@@ -1235,6 +1214,7 @@ btn_proxy = ctk.CTkButton(frame_btns1, text="Включить системный
 btn_proxy.pack(side="right", fill="x", expand=True)
 ToolTip(btn_proxy, "Запустите конфиг и выключите другие прокси расширения.\nРаботает только для браузеров.")
 
+# Кнопки управления (Строка 2)
 frame_btns2 = ctk.CTkFrame(content_frame, fg_color="transparent")
 frame_btns2.pack(fill="x", pady=(5, 5))
 startup_var = ctk.BooleanVar(value=is_in_startup())
@@ -1242,6 +1222,22 @@ ctk.CTkCheckBox(frame_btns2, text="Автозапуск", variable=startup_var, 
 btn_auto = ctk.CTkButton(frame_btns2, text="Автовыбор", width=100, command=on_auto_select_click)
 btn_auto.pack(side="left", padx=(15, 5))
 ToolTip(btn_auto, "Случайный выбор")
+
+# Знак вопроса в пустой части строки
+btn_info = ctk.CTkButton(
+    frame_btns2,
+    text="?",
+    width=26,
+    height=26,
+    corner_radius=13,
+    fg_color="#2c3e50",
+    hover_color="#34495e",
+    text_color="#ecf0f1",
+    font=("Arial", 12, "bold"),
+    command=open_configs_folder
+)
+btn_info.pack(side="right")
+ToolTip(btn_info, get_path_tooltip)
 
 # --- СТРОКА СТАТУСА / ЛОГОВ ---
 lbl_status = ctk.CTkLabel(content_frame, text="• Программа готова к работе", anchor="w", text_color="#BDC3C7", font=("Arial", 11))
@@ -1308,7 +1304,6 @@ try:
     win32api.SetConsoleCtrlHandler(_windows_shutdown_handler, True)
 except ImportError:
     pass 
-
 
 # --- Инициализация перед запуском ---
 register_url_protocol()
