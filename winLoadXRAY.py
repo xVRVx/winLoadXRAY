@@ -131,31 +131,79 @@ def split_flag(tag):
     }
 
 
-# Определение типа конфига (vless raw, hysteria2, XRAY и т.д.)
+# Определение типа конфига (vless reality, vless tls, hysteria2 и т.д.)
 def get_config_type(data):
     try:
+        proto = ""
+        net = ""
+        sec = ""
+
+        # Вариант 1: Данные получены напрямую из парсера ссылки (vless://...)
         if "outbounds" not in data:
             proto = data.get("protocol", "").lower()
-            if proto == "vless":
-                net = data.get("network", "raw")
-                return f"vless {net}"
-            elif proto in ("hysteria", "hy2", "hysteria2"):
-                return "hysteria2"
-        
-        outbounds = data.get("outbounds", [])
-        if not outbounds: return "XRAY"
-        if len(outbounds) > 4: return "XRAY"
-        
-        proto = outbounds[0].get("protocol", "").lower()
-        if proto == "vless":
-            net = outbounds[0].get("streamSettings", {}).get("network", "raw")
-            return f"vless {net}"
-        elif proto in ("hysteria", "hy2", "hysteria2"):
-            return "hysteria2"
+            net = data.get("network") or data.get("type") or "raw"
+            sec = data.get("security", "").lower()
+            
+            if not sec:
+                if data.get("pbk") or data.get("publicKey") or data.get("realitySettings"):
+                    sec = "reality"
+                elif data.get("tls") or data.get("tlsSettings"):
+                    sec = "tls"
+
+        # Вариант 2: Готовый JSON Xray-конфига (из файла или подписки)
         else:
-            return proto.upper() if proto else "XRAY"
+            outbounds = data.get("outbounds", [])
+            if not outbounds or len(outbounds) > 4:
+                return "XRAY"
+            
+            first = outbounds[0]
+            proto = first.get("protocol", "").lower()
+            stream = first.get("streamSettings", {})
+            net = stream.get("network", "raw")
+            sec = stream.get("security", "").lower()
+
+            if not sec:
+                if "realitySettings" in stream:
+                    sec = "reality"
+                elif "tlsSettings" in stream:
+                    sec = "tls"
+
+        proto = proto.lower()
+        net = net.lower()
+        sec = sec.lower()
+
+        # Hysteria / Hy2
+        if proto in ("hysteria", "hy2", "hysteria2"):
+            return "hysteria2"
+
+        # VLESS
+        if proto == "vless":
+            if sec in ("reality", "tls"):
+                # Если сеть стандартная (tcp/raw), выводим компактно: "vless reality" или "vless tls"
+                if net in ("raw", "tcp", ""):
+                    return f"vless {sec}"
+                # Если нестандартный транспорт (например, ws, grpc): "vless grpc reality", "vless ws tls"
+                return f"vless {net} {sec}"
+            return f"vless {net}"
+
+        # Trojan
+        if proto == "trojan":
+            return f"trojan {sec}" if sec else "trojan tls"
+
+        # Другие протоколы
+        if proto:
+            if sec in ("reality", "tls"):
+                return f"{proto} {sec}"
+            return proto.upper()
+
+        return "XRAY"
     except:
         return "XRAY"
+
+
+
+
+
 
 def get_sni_from_config(file_path: str) -> str or None:
     try:
@@ -1048,7 +1096,7 @@ class ConfigList(ctk.CTkScrollableFrame):
         lbl_ping = ctk.CTkLabel(row_frame, text="", width=55, anchor="e", text_color="white")
         lbl_ping.pack(side="right", padx=(0,10))
         
-        lbl_type = ctk.CTkLabel(row_frame, text=config_type, width=90, anchor="w", text_color="gray")
+        lbl_type = ctk.CTkLabel(row_frame, text=config_type, width=105, anchor="w", text_color="gray")
         lbl_type.pack(side="right", padx=(5, 5))
         
         for w in (row_frame, lbl_flag, lbl_name, lbl_ping, lbl_type):
