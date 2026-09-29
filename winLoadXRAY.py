@@ -35,7 +35,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.24-beta"
+APP_VERS = "v1.25-beta"
 XRAY_VERS = "v26.7.28"
 
 xray_process = None
@@ -368,11 +368,9 @@ def add_from_url(is_refresh=False):
         log_message("Поле ввода пусто", "#F39C12")
         return
 
-    # Запоминаем состояние работающего процесса
     was_running = (xray_process is not None and xray_process.poll() is None)
     saved_tag = active_tag
 
-    # Обработка одиночных/нескольких VLESS или HYSTERIA2 ссылок (ручной ввод)
     SUPPORTED_SCHEMES = ("vless://", "hy2://", "hysteria2://")
     if any(input_text.startswith(s) for s in SUPPORTED_SCHEMES):
         stop_xray()
@@ -395,17 +393,14 @@ def add_from_url(is_refresh=False):
             log_message(f"Добавлено конфигов в профиль: {added}", "#2ECC71")
         return
 
-    # Обработка подписки по ссылке (HTTP/S)
     if input_text.startswith("http"):
         try:
             if not is_refresh:
                 log_message("Загрузка подписки...")
             
-            # Скачиваем подписку (VPN в этот момент НЕ отключаем!)
             r = requests.get(input_text, headers={'User-Agent': f'{APP_NAME}/{APP_VERS}'}, timeout=15)
             r.raise_for_status()
 
-            # Считываем интервал автообновления строго из заголовка
             interval_hdr = r.headers.get('profile-update-interval')
             if interval_hdr:
                 match = re.search(r'\d+', str(interval_hdr))
@@ -413,7 +408,6 @@ def add_from_url(is_refresh=False):
             else:
                 auto_update_interval = 0
 
-            # Успешно скачали — обновляем метку времени
             last_update_timestamp = time.time()
 
             if not is_refresh:
@@ -459,7 +453,6 @@ def add_from_url(is_refresh=False):
                     setup_active_profile(prof_name)
                     profile_var.set(prof_name)
 
-            # Теперь, когда данные гарантированно на руках, безопасно останавливаем старый процесс
             stop_xray()
             stop_system_proxy()
 
@@ -511,7 +504,6 @@ def add_from_url(is_refresh=False):
 
             save_state()
 
-            # Восстанавливаем ранее активный конфиг
             if was_running and saved_tag and saved_tag in configs:
                 config_list.select(saved_tag)
                 run_selected()
@@ -520,8 +512,6 @@ def add_from_url(is_refresh=False):
             log_message(f"Подписка обновлена ({added} серверов{interval_info})", "#2ECC71")
 
         except Exception as e:
-            # === ЕСЛИ СЕРВЕР НЕДОСТУПЕН ===
-            # Переносим таймер на полный интервал вперед
             last_update_timestamp = time.time()
             save_state()
 
@@ -557,7 +547,6 @@ def check_auto_update():
     except Exception:
         pass
     finally:
-        # Проверяем каждую минуту (60 000 мс)
         root.after(60000, check_auto_update)
 
 def run_selected():
@@ -568,7 +557,6 @@ def run_selected():
         log_message("Конфиг не выбран", "#F39C12")
         return
 
-    # Проверяем, запущен ли сейчас процесс
     if xray_process and xray_process.poll() is None:
         is_same_config = (active_tag == tag)
         stop_xray()
@@ -796,7 +784,6 @@ def check_latest_version():
             if not latest_version:
                 return
 
-            # Сравниваем версии математически
             if parse_version(latest_version) > parse_version(APP_VERS):
                 is_win7 = False
                 if sys.platform == "win32":
@@ -880,8 +867,9 @@ class ToolTip:
 
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True) 
-        label = tk.Label(tw, text=content, background="#ffffe0", relief="solid", borderwidth=1, font=("tahoma", "8", "normal"), justify="left")
-        label.pack(ipadx=6, ipady=4)
+        # Увеличен шрифт всплывающей подсказки (Segoe UI 10)
+        label = tk.Label(tw, text=content, background="#ffffe0", relief="solid", borderwidth=1, font=("Segoe UI", 10, "normal"), justify="left")
+        label.pack(ipadx=8, ipady=6)
 
         tw.update_idletasks()
         tip_w = tw.winfo_reqwidth()
@@ -913,25 +901,19 @@ CREATE_NO_WINDOW = 0x08000000
 def get_executable_path():
     return sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
 
-def open_configs_folder():
-    """Открывает папку с конфигами в Проводнике Windows"""
+def open_exe_folder():
+    """Открывает папку расположения исполняемого файла в Проводнике Windows"""
     try:
-        target_dir = CONFIGS_DIR if os.path.exists(CONFIGS_DIR) else BASE_APP_DIR
-        os.startfile(target_dir)
+        exe_dir = os.path.dirname(os.path.abspath(get_executable_path()))
+        if os.path.exists(exe_dir):
+            os.startfile(exe_dir)
     except Exception as e:
         log_message(f"Не удалось открыть папку: {e}", "#E74C3C")
 
 def get_path_tooltip():
-    """Формирует текст подсказки с путями"""
-    tag = active_tag or getattr(config_list, 'selected_tag', None)
-    lines = []
-    if tag:
-        file_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
-        lines.append(f"Файл конфига:\n{file_path}\n")
-    lines.append(f"Папка профиля:\n{CONFIGS_DIR}\n")
-    lines.append(f"Исполняемый файл:\n{get_executable_path()}\n")
-    lines.append("(Нажмите, чтобы открыть папку в Проводнике)")
-    return "\n".join(lines)
+    """Формирует текст подсказки: только путь к программе (без инфы о конфигах)"""
+    exe_path = get_executable_path()
+    return f"Исполняемый файл:\n{exe_path}\n\n(Нажмите, чтобы открыть папку с программой)"
 
 def is_in_startup(app_name=APP_NAME):
     try:
@@ -1234,7 +1216,7 @@ btn_info = ctk.CTkButton(
     hover_color="#34495e",
     text_color="#ecf0f1",
     font=("Arial", 12, "bold"),
-    command=open_configs_folder
+    command=open_exe_folder
 )
 btn_info.pack(side="right")
 ToolTip(btn_info, get_path_tooltip)
