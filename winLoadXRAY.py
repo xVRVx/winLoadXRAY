@@ -14,6 +14,8 @@ import webbrowser
 import threading
 import time
 import random
+import copy
+import ssl
 import concurrent.futures
 import urllib.parse
 from urllib.parse import urlparse, parse_qs, unquote
@@ -35,8 +37,10 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.25-beta"
+APP_VERS = "v1.28-beta"
 XRAY_VERS = "v26.7.28"
+
+AUTO_CONFIG_TAG = "⚡ Автоконфиг"
 
 xray_process = None
 IS_AUTOSTART = "--autostart" in sys.argv
@@ -108,9 +112,17 @@ def split_flag(tag):
         return tag[0], tag[1:].strip()
     return "", tag
 
+def is_g_node(tag_name: str) -> bool:
+    """Проверяет, оканчивается ли название сервера на 'G' (для Gemini/Google-роутинга)"""
+    t = tag_name.strip()
+    return bool(re.search(r'(\s|[-_0-9]|^)[Gg]$', t))
+
 # Определение типа конфига (vless reality, vless tls, hysteria2 и т.д.)
 def get_config_type(data):
     try:
+        if "routing" in data and "balancers" in data.get("routing", {}):
+            return "БАЛАНСИР"
+
         proto = ""
         net = ""
         sec = ""
@@ -175,40 +187,180 @@ def get_config_type(data):
     except:
         return "XRAY"
 
-def get_sni_from_config(file_path: str) -> str or None:
+def get_server_endpoint_from_config(file_path: str):
+    """Извлекает реальный адрес, порт и SNI сервера из JSON-конфига"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        if not ("outbounds" in config and len(config['outbounds']) > 0): return None
+        if not ("outbounds" in config and len(config['outbounds']) > 0):
+            return None, None, None
         outbound = config['outbounds'][0]
-        stream_settings = outbound.get('streamSettings', {})
-        if stream_settings:
-            if 'realitySettings' in stream_settings and stream_settings['realitySettings'].get('serverName'):
-                return stream_settings['realitySettings']['serverName']
-            if 'tlsSettings' in stream_settings and stream_settings['tlsSettings'].get('serverName'):
-                return stream_settings['tlsSettings']['serverName']
-        if outbound.get('settings', {}).get('address'):
-            return outbound['settings']['address']
-    except: return None
-    return None
+        settings = outbound.get('settings', {})
+        stream = outbound.get('streamSettings', {})
+        
+        sni = None
+        if 'realitySettings' in stream:
+            sni = stream['realitySettings'].get('serverName')
+        elif 'tlsSettings' in stream:
+            sni = stream['tlsSettings'].get('serverName')
 
-def http_ping(hostname: str, timeout: int = 3) -> (int, str):
-    if not hostname: return -1, "No SNI"
-    url = f"https://{hostname}"
-    proxies = {"http": None, "https": None}
+        address = None
+        port = 443
+
+        # vnext (VLESS, VMess)
+        if 'vnext' in settings and len(settings['vnext']) > 0:
+            vn = settings['vnext'][0]
+            address = vn.get('address')
+            port = vn.get('port', 443)
+        # servers (Trojan, Shadowsocks)
+        elif 'servers' in settings and len(settings['servers']) > 0:
+            srv = settings['servers'][0]
+            address = srv.get('address')
+            port = srv.get('port', 443)
+        # Hysteria2 / прямое указание
+        elif 'address' in settings:
+            address = settings.get('address')
+            port = settings.get('port', 443)
+        elif 'address' in outbound:
+            address = outbound.get('address')
+            port = outbound.get('port', 443)
+
+        return address, port, sni
+    except Exception:
+        return None, None, None
+
+def tcp_ping(host: str, port: int, timeout: float = 2.5) -> (int, str):
+    """Базовый TCP пинг по рукопожатию (SYN -> SYN-ACK)"""
+    if not host or not port:
+        return -1, "No Host"
     try:
-        start_time = time.perf_counter()
-        response = requests.head(url, timeout=timeout, proxies=proxies)
-        end_time = time.perf_counter()
-        if 200 <= response.status_code < 400:
-            return round((end_time - start_time) * 1000), "OK"
-        return -1, f"HTTP {response.status_code}"
-    except: return -1, "Error"
+        t0 = time.perf_counter()
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            pass
+        latency = round((time.perf_counter() - t0) * 1000)
+        return latency, "OK"
+    except socket.timeout:
+        return -1, "Таймаут"
+    except Exception:
+        return -1, "Ошибка"
+
+def tls_ping(host: str, port: int, sni: str = None, timeout: float = 3.5) -> (int, str):
+    """
+    Полноценное TLS-рукопожатие с SNI и передачей HTTP-заголовков.
+    Проверяет, пропускает ли ТСПУ/DPI данный VLESS Reality / TLS туннель.
+    """
+    if not host or not port:
+        return -1, "No Host"
+    sock = None
+    try:
+        t0 = time.perf_counter()
+        sock = socket.create_connection((host, int(port)), timeout=timeout)
+        
+        # Настраиваем контекст TLS (без проверки сертификата, т.к. Reality маскирует сертификаты)
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        server_hostname = sni if sni else host
+        with context.wrap_socket(sock, server_hostname=server_hostname) as ssock:
+            # Отправляем реальный HTTP HEAD-запрос с браузерным заголовком
+            http_req = (
+                f"HEAD / HTTP/1.1\r\n"
+                f"Host: {server_hostname}\r\n"
+                f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\r\n"
+                f"Accept: */*\r\n"
+                f"Connection: close\r\n\r\n"
+            ).encode('utf-8')
+            ssock.sendall(http_req)
+            _ = ssock.recv(256)
+            
+        latency = round((time.perf_counter() - t0) * 1000)
+        return latency, "OK"
+    except socket.timeout:
+        return -1, "Таймаут"
+    except ssl.SSLError:
+        return -1, "TLS Сброс"
+    except Exception:
+        return -1, "Ошибка"
+    finally:
+        if sock:
+            try: sock.close()
+            except: pass
+
+def smart_ping(host: str, port: int, sni: str = None, timeout: float = 3.5) -> (int, str):
+    """Умная проверка: если есть SNI — проверяет через полное TLS-соединение, иначе по TCP"""
+    if sni:
+        res, status = tls_ping(host, port, sni, timeout=timeout)
+        if res >= 0:
+            return res, status
+    return tcp_ping(host, port, timeout=2.5)
+
+def real_proxy_ping(host="127.0.0.1", port=2080, timeout=4.0) -> (int, str):
+    """
+    Реальный сквозной пинг через локальный прокси Xray (SOCKS5 или HTTP)
+    на чистых сокетах без сторонних зависимостей (PySocks).
+    Отправляет полноценный HTTP GET запрос с заголовками к генератору 204 Cloudflare.
+    """
+    t0 = time.perf_counter()
+    try:
+        # 1. Сначала пробуем протокол SOCKS5 (RFC 1928)
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout) as s:
+                s.settimeout(timeout)
+                # Приветствие SOCKS5: Версия 5, 1 метод, без аутентификации (0x00)
+                s.sendall(b'\x05\x01\x00')
+                auth_resp = s.recv(2)
+                
+                if auth_resp == b'\x05\x00':
+                    # CONNECT к cp.cloudflare.com:80
+                    domain = b'cp.cloudflare.com'
+                    connect_req = b'\x05\x01\x00\x03' + bytes([len(domain)]) + domain + (80).to_bytes(2, 'big')
+                    s.sendall(connect_req)
+                    conn_resp = s.recv(512)
+                    
+                    if conn_resp and len(conn_resp) >= 2 and conn_resp[1] == 0:
+                        # Туннель готов. Шлем полноценный HTTP-запрос
+                        http_req = (
+                            b"GET /generate_204 HTTP/1.1\r\n"
+                            b"Host: cp.cloudflare.com\r\n"
+                            b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n"
+                            b"Accept: */*\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+                        s.sendall(http_req)
+                        data = s.recv(512)
+                        if b"204" in data or b"200" in data or b"301" in data:
+                            return round((time.perf_counter() - t0) * 1000), "OK"
+                        return -1, "HTTP Err"
+                    return -1, "SOCKS5 Err"
+        except Exception:
+            pass
+
+        # 2. Если на порту HTTP-прокси (а не SOCKS5)
+        with socket.create_connection((host, int(port)), timeout=timeout) as s:
+            s.settimeout(timeout)
+            http_proxy_req = (
+                b"GET http://cp.cloudflare.com/generate_204 HTTP/1.1\r\n"
+                b"Host: cp.cloudflare.com\r\n"
+                b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n"
+                b"Proxy-Connection: close\r\n\r\n"
+            )
+            s.sendall(http_proxy_req)
+            data = s.recv(512)
+            if b"204" in data or b"200" in data or b"301" in data:
+                return round((time.perf_counter() - t0) * 1000), "OK"
+            return -1, "HTTP Err"
+
+    except socket.timeout:
+        return -1, "Таймаут"
+    except Exception:
+        return -1, "Ошибка"
 
 # --- Профили и Файлы ---
 def setup_active_profile(profile_name):
-    global CONFIGS_DIR, LINKS_FILE, STATE_FILE, active_profile, configs, base64_urls, auto_update_interval, last_update_timestamp
+    global CONFIGS_DIR, LINKS_FILE, STATE_FILE, active_profile, configs, base64_urls, auto_update_interval, last_update_timestamp, active_tag
     active_profile = profile_name
+    active_tag = None
     CONFIGS_DIR = os.path.join(PROFILES_DIR, profile_name)
     os.makedirs(CONFIGS_DIR, exist_ok=True)
     LINKS_FILE = os.path.join(CONFIGS_DIR, "links.json")
@@ -240,8 +392,10 @@ def load_initial_profile():
     setup_active_profile(prof)
 
 def save_state():
+    tag_to_save = active_tag if active_tag else (config_list.selected_tag if 'config_list' in globals() else None)
     state = {
         "active_tag": active_tag, 
+        "selected_tag": tag_to_save,
         "proxy_enabled": proxy_enabled,
         "update_interval": auto_update_interval,
         "last_update": last_update_timestamp
@@ -253,35 +407,72 @@ def save_state():
 
 def load_state(is_initial=False):
     global active_tag, proxy_enabled, auto_update_interval, last_update_timestamp
+    if not is_initial:
+        active_tag = None
+        if 'config_list' in globals():
+            config_list.selected_tag = None
+            config_list.update_colors()
+        if 'btn_run' in globals():
+            btn_run.configure(text="Запустить конфиг", fg_color=["#3B8ED0", "#1F6AA5"], hover_color=["#36719F", "#144870"])
+        update_proxy_button_color()
+
     if not os.path.exists(STATE_FILE): return
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
-        active_tag = state.get("active_tag")
-        proxy_enabled = state.get("proxy_enabled", False)
+        saved_active_tag = state.get("active_tag")
+        saved_selected_tag = state.get("selected_tag") or saved_active_tag
+        saved_proxy = state.get("proxy_enabled", False)
         auto_update_interval = state.get("update_interval", 0)
         last_update_timestamp = state.get("last_update", 0)
 
-        if proxy_enabled:
-            toggle_system_proxy()
-            toggle_system_proxy()
+        if is_initial:
+            if saved_proxy:
+                proxy_enabled = False
+                toggle_system_proxy()
 
-        if active_tag and active_tag in configs:
-            config_list.select(active_tag)
-            if is_initial:
-                config_path = os.path.join(CONFIGS_DIR, f"{active_tag}.json")
-                if os.path.exists(config_path):
+            if saved_active_tag and saved_active_tag in configs:
+                config_list.select(saved_active_tag)
+                config_path = os.path.join(CONFIGS_DIR, f"{saved_active_tag}.json")
+                if os.path.exists(config_path) and os.path.exists(XRAY_EXE):
                     global xray_process
                     xray_process = subprocess.Popen([XRAY_EXE, "-config", config_path], creationflags=CREATE_NO_WINDOW)
+                    highlight_active(saved_active_tag)
                     btn_run.configure(text="Остановить конфиг", fg_color="#27AE60", hover_color="#2ECC71")
-                    log_message(f"Конфиг '{active_tag}' запущен", "#2ECC71")
+                    log_message(f"Конфиг '{saved_active_tag}' запущен", "#2ECC71")
+            elif saved_selected_tag and saved_selected_tag in configs:
+                config_list.select(saved_selected_tag)
+        else:
+            # При переключении профиля Xray всегда остановлен, конфиг не должен гореть зеленым
+            active_tag = None
+            tag_to_select = saved_selected_tag if (saved_selected_tag and saved_selected_tag in configs) else None
+            if tag_to_select:
+                config_list.select(tag_to_select)
+            else:
+                config_list.selected_tag = None
+                config_list.update_colors()
     except: pass
 
 def load_base64_urls():
     configs.clear()
     config_list.clear()
+
+    # Сначала загружаем Автоконфиг (если есть), чтобы он был самым первым в списке
+    auto_file = f"{AUTO_CONFIG_TAG}.json"
+    auto_path = os.path.join(CONFIGS_DIR, auto_file)
+    if os.path.exists(auto_path):
+        try:
+            with open(auto_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                tag = config_data.get("tag", AUTO_CONFIG_TAG)
+                configs[tag] = config_data
+                ctype = get_config_type(config_data)
+                config_list.insert(tag, ctype)
+        except Exception:
+            pass
+
     for filename in os.listdir(CONFIGS_DIR):
-        if filename.endswith(".json") and filename not in ("links.json", "state.json"):
+        if filename.endswith(".json") and filename not in ("links.json", "state.json", auto_file):
             try:
                 with open(os.path.join(CONFIGS_DIR, filename), "r", encoding="utf-8") as f:
                     config_data = json.load(f)
@@ -314,6 +505,211 @@ def clear_xray_configs():
         if filename.endswith(".json") and filename not in ("links.json", "state.json"):
             try: os.remove(os.path.join(CONFIGS_DIR, filename))
             except: pass
+
+# --- Автобалансировщик Xray (leastPing + Gemini роутинг + Обход РФ) ---
+def generate_balancer_config():
+    """Собирает ноды профиля в балансировщик (leastPing) с отдельным пулом под Gemini для нод с буквой G"""
+    auto_config_path = os.path.join(CONFIGS_DIR, f"{AUTO_CONFIG_TAG}.json")
+    
+    collected_outbounds = []
+    base_inbounds = None
+    g_count = 0
+    main_count = 0
+
+    for filename in os.listdir(CONFIGS_DIR):
+        if not filename.endswith(".json"):
+            continue
+        if filename in ("links.json", "state.json", f"{AUTO_CONFIG_TAG}.json"):
+            continue
+
+        try:
+            with open(os.path.join(CONFIGS_DIR, filename), "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            outbounds = data.get("outbounds", [])
+            if not outbounds:
+                continue
+
+            node_outbound = copy.deepcopy(outbounds[0])
+            proto = node_outbound.get("protocol", "").lower()
+            if proto in ("freedom", "blackhole", "dns", ""):
+                continue
+
+            if not base_inbounds and data.get("inbounds"):
+                base_inbounds = copy.deepcopy(data["inbounds"])
+
+            # Проверяем, относится ли нода к группе 'G' (Gemini)
+            tag_name = data.get("tag", os.path.splitext(filename)[0])
+            if is_g_node(tag_name):
+                node_outbound["tag"] = f"node-g-{g_count}"
+                g_count += 1
+            else:
+                node_outbound["tag"] = f"node-m-{main_count}"
+                main_count += 1
+
+            collected_outbounds.append(node_outbound)
+        except Exception:
+            continue
+
+    total_nodes = g_count + main_count
+    if total_nodes < 2:
+        return False, 0
+
+    if not base_inbounds:
+        base_inbounds = [
+            {
+                "tag": "socks-in",
+                "port": 2080,
+                "listen": "127.0.0.1",
+                "protocol": "socks",
+                "settings": {"udp": True, "auth": "noauth"}
+            }
+        ]
+
+    balancers = []
+    rules = []
+
+    # 1. Блокировка рекламы и телеметрии
+    rules.append({
+        "type": "field",
+        "domain": [
+            "geosite:category-ads",
+            "geosite:win-spy"
+        ],
+        "outboundTag": "block"
+    })
+
+    # 2. Торренты мимо прокси (напрямую)
+    rules.append({
+        "type": "field",
+        "protocol": ["bittorrent"],
+        "outboundTag": "direct"
+    })
+
+    # 3. Gemini — пускаем строго на G-балансировщик (если G-ноды есть)
+    if g_count > 0:
+        balancers.append({
+            "tag": "gemini-balancer",
+            "selector": ["node-g-"],
+            "strategy": {
+                "type": "leastPing"
+            },
+            "fallbackTag": "node-g-0"
+        })
+        rules.append({
+            "type": "field",
+            "domain": [
+                "geosite:google-gemini",
+                "domain:gemini.google.com",
+                "domain:generativeai.google",
+                "domain:proactivebackend-pa.googleapis.com",
+                "domain:alkalimakersuite-pa.clients6.google.com"
+            ],
+            "balancerTag": "gemini-balancer"
+        })
+
+    # 4. Исключения (сайты, которые должны идти через прокси, даже если это .ru или СНГ)
+    rules.append({
+        "type": "field",
+        "domain": [
+            "habr.com",
+            "apkmirror.com"
+        ],
+        "balancerTag": "auto-balancer"
+    })
+
+    # 5. Российские домены и сервисы — напрямую (DIRECT)
+    rules.append({
+        "type": "field",
+        "domain": [
+            "geosite:private",
+            "ifconfig.me",
+            "checkip.amazonaws.com",
+            "pify.org",
+            "domain:ru",
+            "domain:su",
+            "domain:xn--p1ai",
+            "geosite:category-ip-geo-detect",
+            "geosite:apple",
+            "geosite:apple-pki",
+            "geosite:yandex",
+            "geosite:vk",
+            "geosite:category-ru"
+        ],
+        "outboundTag": "direct"
+    })
+
+    # 6. Российские IP-адреса — напрямую (DIRECT)
+    rules.append({
+        "type": "field",
+        "ip": [
+            "geoip:ru",
+            "geoip:private"
+        ],
+        "outboundTag": "direct"
+    })
+
+    # 7. Основной балансировщик для всего остального зарубежного трафика
+    fallback_node = "node-g-0" if (main_count == 0 and g_count > 0) else "node-m-0"
+    balancers.append({
+        "tag": "auto-balancer",
+        "selector": ["node-"],
+        "strategy": {
+            "type": "leastPing"
+        },
+        "fallbackTag": fallback_node
+    })
+    rules.append({
+        "type": "field",
+        "network": "tcp,udp",
+        "balancerTag": "auto-balancer"
+    })
+
+    # Интервал: 120 секунд для Gemini, 90 секунд для обычных серверов
+    interval = "120s" if g_count > 0 else "90s"
+    probe_url = "http://www.google.com/generate_204" if g_count > 0 else "http://cp.cloudflare.com/generate_204"
+
+    master_config = {
+        "log": {"loglevel": "warning"},
+        "inbounds": base_inbounds,
+        "observatory": {
+            "subjectSelector": ["node-"],
+            "probeURL": probe_url,
+            "probeInterval": interval,
+            "enableConcurrency": True
+        },
+        "routing": {
+            "domainMatcher": "hybrid",
+            "domainStrategy": "IPIfNonMatch",
+            "balancers": balancers,
+            "rules": rules
+        },
+        "outbounds": collected_outbounds + [
+            {"tag": "direct", "protocol": "freedom"},
+            {"tag": "block", "protocol": "blackhole"}
+        ]
+    }
+
+    try:
+        with open(auto_config_path, "w", encoding="utf-8") as f:
+            json.dump(master_config, f, indent=2, ensure_ascii=False)
+
+        configs[AUTO_CONFIG_TAG] = master_config
+        ctype = get_config_type(master_config)
+        config_list.insert(AUTO_CONFIG_TAG, ctype, at_top=True)
+        return True, g_count
+    except Exception as e:
+        log_message(f"Ошибка создания балансировщика: {e}", "#E74C3C")
+        return False, 0
+
+def on_manual_balancer_click():
+    ok, g_count = generate_balancer_config()
+    if ok:
+        interval_str = "120с" if g_count > 0 else "90с"
+        g_info = f" (Gemini -> G-ноды: {g_count}, интервал: {interval_str})" if g_count > 0 else f" (интервал: {interval_str})"
+        log_message(f"⚡ Автоконфиг успешно создан/обновлен{g_info}", "#2ECC71")
+    else:
+        log_message("Для балансировщика нужно минимум 2 сервера", "#F39C12")
 
 # --- Основные функции ---
 def toggle_system_proxy(host="127.0.0.1", port=2080):
@@ -371,6 +767,9 @@ def add_from_url(is_refresh=False):
     was_running = (xray_process is not None and xray_process.poll() is None)
     saved_tag = active_tag
 
+    # Проверяем, существовал ли ранее Автоконфиг в текущем профиле
+    had_balancer = os.path.exists(os.path.join(CONFIGS_DIR, f"{AUTO_CONFIG_TAG}.json"))
+
     SUPPORTED_SCHEMES = ("vless://", "hy2://", "hysteria2://")
     if any(input_text.startswith(s) for s in SUPPORTED_SCHEMES):
         stop_xray()
@@ -389,8 +788,17 @@ def add_from_url(is_refresh=False):
                     f.write(generate_config(data))
                 added += 1
             except: pass
+
+        # Если Автоконфиг уже существовал в профиле, пересобираем его
+        balancer_rebuilt = False
+        g_count = 0
+        if had_balancer and added > 1:
+            balancer_rebuilt, g_count = generate_balancer_config()
+
         if added > 0 and not is_refresh:
-            log_message(f"Добавлено конфигов в профиль: {added}", "#2ECC71")
+            g_str = f", G-нод: {g_count}" if g_count > 0 else ""
+            balancer_info = f" + Автоконфиг пересобран{g_str}" if balancer_rebuilt else ""
+            log_message(f"Добавлено конфигов в профиль: {added}{balancer_info}", "#2ECC71")
         return
 
     if input_text.startswith("http"):
@@ -446,6 +854,8 @@ def add_from_url(is_refresh=False):
                         break
 
                 if prof_name != active_profile:
+                    stop_xray()
+                    stop_system_proxy()
                     profs = get_profiles()
                     if prof_name not in profs:
                         profs.append(prof_name)
@@ -455,6 +865,9 @@ def add_from_url(is_refresh=False):
 
             stop_xray()
             stop_system_proxy()
+
+            # Проверяем наличие балансировщика в целевом профиле перед очисткой
+            had_balancer = os.path.exists(os.path.join(CONFIGS_DIR, f"{AUTO_CONFIG_TAG}.json"))
 
             clear_xray_configs()
             base64_urls = [input_text]
@@ -502,6 +915,12 @@ def add_from_url(is_refresh=False):
                         log_message("Сбой парсинга подписки", "#E74C3C")
                     return
 
+            # Если ранее в этом профиле был создан балансировщик, автоматически пересобираем его
+            balancer_rebuilt = False
+            g_count = 0
+            if had_balancer and added > 1:
+                balancer_rebuilt, g_count = generate_balancer_config()
+
             save_state()
 
             if was_running and saved_tag and saved_tag in configs:
@@ -509,7 +928,9 @@ def add_from_url(is_refresh=False):
                 run_selected()
 
             interval_info = f", автообновление: {auto_update_interval}ч" if auto_update_interval > 0 else ""
-            log_message(f"Подписка обновлена ({added} серверов{interval_info})", "#2ECC71")
+            g_str = f", G-нод: {g_count}" if g_count > 0 else ""
+            balancer_info = f" + Автоконфиг пересобран{g_str}" if balancer_rebuilt else ""
+            log_message(f"Подписка обновлена ({added} серверов{balancer_info}{interval_info})", "#2ECC71")
 
         except Exception as e:
             last_update_timestamp = time.time()
@@ -607,6 +1028,8 @@ def add_new_profile():
     if name:
         name = sanitize_filename(name.strip())
         if name:
+            stop_xray()
+            stop_system_proxy()
             setup_active_profile(name)
             profs = get_profiles()
             profile_dropdown.configure(values=profs)
@@ -629,24 +1052,30 @@ def delete_current_profile():
     new_prof = profs[0]
     profile_dropdown.configure(values=profs)
     profile_var.set(new_prof)
-    switch_profile(new_prof)
+    setup_active_profile(new_prof)
+    load_base64_urls()
+    load_state(is_initial=False)
     log_message(f"Профиль '{deleted_name}' удален", "#F39C12")
 
-# --- Рандомный автовыбор ---
-def on_auto_select_click():
+# --- Проверка пинга всех серверов без переключения ---
+def on_ping_all_click():
     tags = config_list.get_all_tags()
     if not tags: 
         log_message("Список серверов пуст", "#F39C12")
         return
-    btn_auto.configure(state="disabled", text="Ищем...")
-    log_message("Проверка доступности серверов...")
+    btn_ping_all.configure(state="disabled", text="Замер...")
+    log_message("Замер задержки серверов (TLS/HTTP)...")
 
     def ping_all_task():
         def check_tag(t):
+            # Если это активный запущенный конфиг — шлем через туннель к генератору 204
+            if xray_process and xray_process.poll() is None and active_tag == t:
+                ms, _ = real_proxy_ping(timeout=4.0)
+                return t, ms
             config_path = os.path.join(CONFIGS_DIR, f"{t}.json")
-            sni = get_sni_from_config(config_path)
-            if sni:
-                ms, _ = http_ping(sni, timeout=2)
+            host, port, sni = get_server_endpoint_from_config(config_path)
+            if host and port:
+                ms, _ = smart_ping(host, port, sni, timeout=3.5)
                 return t, ms
             return t, -1
 
@@ -654,7 +1083,6 @@ def on_auto_select_click():
             results = list(executor.map(check_tag, tags))
 
         valid_results = [r for r in results if r[1] >= 0]
-        best_tag = random.choice(valid_results)[0] if valid_results else None
 
         def update_ui():
             for original_tag in tags:
@@ -662,20 +1090,12 @@ def on_auto_select_click():
                 res_str = f"{ms} ms" if ms >= 0 else "Ошибка"
                 config_list.update_ping(original_tag, res_str)
 
-            if best_tag:
-                config_list.select(best_tag)
-                if xray_process and xray_process.poll() is None: stop_xray()
-                run_selected()
-                log_message(f"Выбран случайный рабочий сервер: {best_tag}", "#2ECC71")
-            else:
-                log_message("Не найдено доступных серверов", "#E74C3C")
+            btn_ping_all.configure(state="normal", text="Пинг")
+            log_message(f"Проверка завершена. Доступно: {len(valid_results)} из {len(tags)}", "#2ECC71" if valid_results else "#E74C3C")
 
-            def finish():
-                btn_auto.configure(state="normal", text="Автовыбор")
-                for original_tag in tags:
-                    config_list.update_ping(original_tag, "")
+            # Отображаем цифры пинга 15 секунд для комфортного ознакомления
+            root.after(15000, lambda: [config_list.update_ping(t, "") for t in tags])
 
-            root.after(2000, finish)
         root.after(0, update_ui)
     threading.Thread(target=ping_all_task, daemon=True).start()
 
@@ -683,17 +1103,32 @@ def on_auto_select_click():
 def on_context_ping_click():
     tag = config_list.selected_tag
     if not tag: return
-    config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
-    sni = get_sni_from_config(config_path)
 
+    is_running_now = (xray_process and xray_process.poll() is None and active_tag == tag)
+    
     def ping_task():
-        ms, status = http_ping(sni, timeout=2) if sni else (-1, "No SNI")
-        res_str = f"{ms} ms" if ms >= 0 else ("Ошибка" if sni else "No SNI")
+        if is_running_now:
+            ms, status = real_proxy_ping(timeout=4.0)
+            res_str = f"{ms} ms" if ms >= 0 else status
+            check_type = "Туннель SOCKS5"
+        else:
+            config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
+            host, port, sni = get_server_endpoint_from_config(config_path)
+            if host and port:
+                ms, status = smart_ping(host, port, sni, timeout=3.5)
+                res_str = f"{ms} ms" if ms >= 0 else status
+                check_type = "TLS + HTTP Handshake" if sni else "TCP пинг"
+            else:
+                res_str = "No Host"
+                check_type = "Ошибка"
+
         def update_ui():
             config_list.update_ping(tag, res_str)
-            log_message(f"Пинг {tag}: {res_str}")
-            root.after(2000, lambda: config_list.update_ping(tag, ""))
+            log_message(f"[{check_type}] {tag}: {res_str}")
+            # Держим результат пинга 15 секунд
+            root.after(15000, lambda: config_list.update_ping(tag, ""))
         root.after(0, update_ui)
+        
     threading.Thread(target=ping_task, daemon=True).start()
 
 def on_context_delete_config():
@@ -867,7 +1302,6 @@ class ToolTip:
 
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True) 
-        # Увеличен шрифт всплывающей подсказки (Segoe UI 10)
         label = tk.Label(tw, text=content, background="#ffffe0", relief="solid", borderwidth=1, font=("Segoe UI", 10, "normal"), justify="left")
         label.pack(ipadx=8, ipady=6)
 
@@ -878,7 +1312,6 @@ class ToolTip:
         x = self.widget.winfo_rootx() + 20
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
 
-        # Предотвращаем вылет тултипа за пределы экрана справа
         if x + tip_w > screen_w - 10:
             x = screen_w - tip_w - 10
         if x < 10:
@@ -1039,11 +1472,11 @@ class ConfigList(ctk.CTkScrollableFrame):
         self.selected_tag = None
         self.emoji_font = ctk.CTkFont(family="Segoe UI Emoji", size=16)
 
-    def insert(self, tag, config_type="XRAY"):
-        if tag in self.rows: return
+    def insert(self, tag, config_type="XRAY", at_top=False):
+        if tag in self.rows:
+            self.delete(tag)
         
         row_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0, border_width=0)
-        row_frame.pack(fill="x", padx=2, pady=1)
         
         flag, name = split_flag(tag)
         
@@ -1054,7 +1487,7 @@ class ConfigList(ctk.CTkScrollableFrame):
         lbl_name.pack(side="left", fill="x", expand=True, padx=5)
         
         # --- Правый блок ---
-        lbl_ping = ctk.CTkLabel(row_frame, text="", width=55, anchor="e", text_color="white")
+        lbl_ping = ctk.CTkLabel(row_frame, text="", width=65, anchor="e", text_color="white")
         lbl_ping.pack(side="right", padx=(0,10))
         
         lbl_type = ctk.CTkLabel(row_frame, text=config_type, width=105, anchor="w", text_color="gray")
@@ -1066,13 +1499,21 @@ class ConfigList(ctk.CTkScrollableFrame):
             w.bind("<Double-Button-1>", lambda e, t=tag: self.double_click(t))
             w.configure(cursor="hand2")
 
-        self.rows[tag] = {
+        row_dict = {
             "frame": row_frame,
             "lbl_name": lbl_name,
             "lbl_ping": lbl_ping,
             "lbl_type": lbl_type,
             "lbl_flag": lbl_flag
         }
+
+        if at_top and self.rows:
+            first_frame = next(iter(self.rows.values()))["frame"]
+            row_frame.pack(fill="x", padx=2, pady=1, before=first_frame)
+            self.rows = {tag: row_dict, **self.rows}
+        else:
+            row_frame.pack(fill="x", padx=2, pady=1)
+            self.rows[tag] = row_dict
 
     def update_colors(self):
         for t, widgets in self.rows.items():
@@ -1179,7 +1620,7 @@ ToolTip(btn_refresh, "Обновить подписку")
 
 # Список конфигов
 context_menu = tk.Menu(root, tearoff=0, bg="#2b2b2b", fg="white", activebackground="#3498db")
-context_menu.add_command(label="SNI Ping", command=on_context_ping_click)
+context_menu.add_command(label="Проверить пинг", command=on_context_ping_click)
 context_menu.add_command(label="Удалить конфиг", command=on_context_delete_config)
 
 config_list = ConfigList(content_frame, fg_color=LIST_BG_COLOR, right_click_command=show_context_menu, width=400, height=150)
@@ -1201,9 +1642,14 @@ frame_btns2 = ctk.CTkFrame(content_frame, fg_color="transparent")
 frame_btns2.pack(fill="x", pady=(5, 5))
 startup_var = ctk.BooleanVar(value=is_in_startup())
 ctk.CTkCheckBox(frame_btns2, text="Автозапуск", variable=startup_var, command=toggle_startup, text_color="white").pack(side="left")
-btn_auto = ctk.CTkButton(frame_btns2, text="Автовыбор", width=100, command=on_auto_select_click)
-btn_auto.pack(side="left", padx=(15, 5))
-ToolTip(btn_auto, "Случайный выбор")
+
+btn_ping_all = ctk.CTkButton(frame_btns2, text="Пинг", width=85, command=on_ping_all_click)
+btn_ping_all.pack(side="left", padx=(10, 5))
+ToolTip(btn_ping_all, "Проверить реальную задержку всех серверов без переключения")
+
+btn_make_balancer = ctk.CTkButton(frame_btns2, text="Балансир", width=85, command=on_manual_balancer_click)
+btn_make_balancer.pack(side="left", padx=(0, 5))
+ToolTip(btn_make_balancer, "Создать/обновить Автоконфиг с балансировкой leastPing и Gemini-роутингом")
 
 # Знак вопроса в пустой части строки
 btn_info = ctk.CTkButton(
