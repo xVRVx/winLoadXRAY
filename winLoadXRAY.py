@@ -38,7 +38,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.29-beta"
+APP_VERS = "v1.30-beta"
 XRAY_VERS = "v26.7.28"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
@@ -1226,30 +1226,41 @@ def download_and_install_update(download_url, new_version):
             log_message("Установка и перезапуск...", "#2ECC71")
             time.sleep(0.5)
 
-            current_pid = os.getpid()
-            bat_path = os.path.join(tempfile.gettempdir(), f"winload_updater_{current_pid}.bat")
+            exe_name = os.path.basename(current_exe)
+            bat_path = os.path.join(tempfile.gettempdir(), f"winload_updater_{int(time.time())}.bat")
 
-            # Скрипт в цикле ожидает разблокировки файла и запускает новый exe только после успешной замены
+            # ВАЖНО:
+            # 1. Закрываем по имени образа (taskkill /f /im), чтобы закрыть и загрузчик PyInstaller, и Python.
+            # 2. В .bat используем только 'rem' (никаких '::' внутри циклов).
+            # 3. В цикле удаляем старый exe. Как только del удался — блокировка 100% снята,
+            #    и move на пустое место выполнится моментально без ошибок доступа.
             bat_content = f"""@echo off
 chcp 65001 > nul
 set PYINSTALLER_RESET_ENVIRONMENT=1
-set attempts=0
 
-:loop
+rem Даем программе 2 секунды на штатное закрытие
+ping 127.0.0.1 -n 3 > nul
+
+rem Принудительно гасим все оставшиеся процессы приложения по имени
+taskkill /f /im "{exe_name}" > nul 2>&1
+
+set attempts=0
+:loop_del
 set /a attempts+=1
 if %attempts% gtr 30 goto fail
 
-ping 127.0.0.1 -n 2 > nul
-
-:: Если процесс все еще держит файл через 4 секунды — форсированно снимаем его
-if %attempts% gtr 4 (
-    taskkill /F /PID {current_pid} > nul 2>&1
+del /f /q "{current_exe}" > nul 2>&1
+if exist "{current_exe}" (
+    ping 127.0.0.1 -n 2 > nul
+    taskkill /f /im "{exe_name}" > nul 2>&1
+    goto loop_del
 )
 
+rem Перемещаем скачанный файл на место удаленного старого
 move /y "{temp_exe}" "{current_exe}" > nul 2>&1
-if exist "{temp_exe}" goto loop
+if not exist "{current_exe}" goto fail
 
-:: Запуск новой версии только после успешной замены файла
+rem Запускаем обновленную версию
 start "" "{current_exe}"
 goto cleanup
 
@@ -1285,6 +1296,7 @@ del /f /q "%~f0" > nul 2>&1
                 except: pass
 
     threading.Thread(target=_worker, daemon=True).start()
+
 
 
 
