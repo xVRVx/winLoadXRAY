@@ -37,7 +37,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.28-beta"
+APP_VERS = "v1.29-beta"
 XRAY_VERS = "v26.7.28"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
@@ -766,6 +766,7 @@ def add_from_url(is_refresh=False):
 
     was_running = (xray_process is not None and xray_process.poll() is None)
     saved_tag = active_tag
+    was_proxy = proxy_enabled
 
     # Проверяем, существовал ли ранее Автоконфиг в текущем профиле
     had_balancer = os.path.exists(os.path.join(CONFIGS_DIR, f"{AUTO_CONFIG_TAG}.json"))
@@ -789,7 +790,6 @@ def add_from_url(is_refresh=False):
                 added += 1
             except: pass
 
-        # Если Автоконфиг уже существовал в профиле, пересобираем его
         balancer_rebuilt = False
         g_count = 0
         if had_balancer and added > 1:
@@ -812,11 +812,49 @@ def add_from_url(is_refresh=False):
             interval_hdr = r.headers.get('profile-update-interval')
             if interval_hdr:
                 match = re.search(r'\d+', str(interval_hdr))
-                auto_update_interval = int(match.group(0)) if match else 0
-            else:
+                if match:
+                    auto_update_interval = int(match.group(0))
+            elif not is_refresh:
                 auto_update_interval = 0
 
             last_update_timestamp = time.time()
+
+            # Предварительный парсинг в память, чтобы не ломать конфиги при сбое
+            parsed_items = []
+            try:
+                decoded = safe_b64decode(r.text)
+                lines = [l.strip() for l in decoded.splitlines() if any(l.startswith(s) for s in SUPPORTED_SCHEMES)]
+                for line in lines:
+                    try:
+                        data = parse_node_url(line)
+                        if data:
+                            parsed_items.append(("link", data))
+                    except: pass
+            except:
+                pass
+
+            if not parsed_items:
+                clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
+                try:
+                    loaded_data = json.loads(clean_content)
+                    items = loaded_data if isinstance(loaded_data, list) else [loaded_data]
+                    for item_data in items:
+                        if item_data.get("protocol") == "shadowsocks":
+                            continue
+                        outbounds = item_data.get("outbounds", [])
+                        if outbounds and outbounds[0].get("protocol") == "shadowsocks":
+                            continue
+                        parsed_items.append(("json", item_data))
+                except:
+                    pass
+
+            if not parsed_items:
+                save_state()
+                if not is_refresh: 
+                    log_message("Не удалось распарсить подписку", "#E74C3C")
+                else:
+                    log_message("Сбой парсинга подписки", "#E74C3C")
+                return
 
             if not is_refresh:
                 prof_name = None
@@ -864,9 +902,10 @@ def add_from_url(is_refresh=False):
                     profile_var.set(prof_name)
 
             stop_xray()
-            stop_system_proxy()
+            # ПРИ АВТООБНОВЛЕНИИ НЕ ВЫКЛЮЧАЕМ СИСТЕМНЫЙ ПРОКСИ
+            if not is_refresh:
+                stop_system_proxy()
 
-            # Проверяем наличие балансировщика в целевом профиле перед очисткой
             had_balancer = os.path.exists(os.path.join(CONFIGS_DIR, f"{AUTO_CONFIG_TAG}.json"))
 
             clear_xray_configs()
@@ -874,48 +913,27 @@ def add_from_url(is_refresh=False):
             save_base64_urls()
 
             added = 0
-            try:
-                decoded = safe_b64decode(r.text)
-                lines = [l.strip() for l in decoded.splitlines() if any(l.startswith(s) for s in SUPPORTED_SCHEMES)]
-                for line in lines:
-                    try:
-                        data = parse_node_url(line)
-                        if not data: continue
-                        tag = data["tag"]
-                        configs[tag] = data
-                        ctype = get_config_type(data)
+            for item_type, item_data in parsed_items:
+                try:
+                    if item_type == "link":
+                        tag = item_data["tag"]
+                        configs[tag] = item_data
+                        ctype = get_config_type(item_data)
                         config_list.insert(tag, ctype)
                         with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as f:
-                            f.write(generate_config(data))
+                            f.write(generate_config(item_data))
                         added += 1
-                    except: pass
-            except:
-                clean_content = re.sub(r'<[^>]+>', '', r.text).strip()
-                try:
-                    loaded_data = json.loads(clean_content)
-                    items = loaded_data if isinstance(loaded_data, list) else [loaded_data]
-                    for config_data in items:
-                        if config_data.get("protocol") == "shadowsocks":
-                            continue
-                        outbounds = config_data.get("outbounds", [])
-                        if outbounds and outbounds[0].get("protocol") == "shadowsocks":
-                            continue
-
-                        tag = sanitize_filename(unquote(config_data.get("remarks", config_data.get("tag", f"import_{added}"))))
-                        configs[tag] = config_data
-                        ctype = get_config_type(config_data)
+                    elif item_type == "json":
+                        tag = sanitize_filename(unquote(item_data.get("remarks", item_data.get("tag", f"import_{added}"))))
+                        configs[tag] = item_data
+                        ctype = get_config_type(item_data)
                         config_list.insert(tag, ctype)
                         with open(os.path.join(CONFIGS_DIR, f"{tag}.json"), "w", encoding="utf-8") as cf:
-                            json.dump(config_data, cf, indent=2, ensure_ascii=False)
+                            json.dump(item_data, cf, indent=2, ensure_ascii=False)
                         added += 1
-                except:
-                    if not is_refresh: 
-                        log_message("Не удалось распарсить подписку", "#E74C3C")
-                    else:
-                        log_message("Сбой парсинга подписки", "#E74C3C")
-                    return
+                except Exception:
+                    pass
 
-            # Если ранее в этом профиле был создан балансировщик, автоматически пересобираем его
             balancer_rebuilt = False
             g_count = 0
             if had_balancer and added > 1:
@@ -923,9 +941,22 @@ def add_from_url(is_refresh=False):
 
             save_state()
 
-            if was_running and saved_tag and saved_tag in configs:
-                config_list.select(saved_tag)
-                run_selected()
+            # Восстанавливаем работу Xray
+            if was_running:
+                tag_to_run = None
+                if saved_tag and saved_tag in configs:
+                    tag_to_run = saved_tag
+                elif AUTO_CONFIG_TAG in configs:
+                    tag_to_run = AUTO_CONFIG_TAG
+                elif configs:
+                    tag_to_run = next(iter(configs.keys()))
+
+                if tag_to_run:
+                    config_list.select(tag_to_run)
+                    run_selected()
+                else:
+                    if was_proxy:
+                        stop_system_proxy()
 
             interval_info = f", автообновление: {auto_update_interval}ч" if auto_update_interval > 0 else ""
             g_str = f", G-нод: {g_count}" if g_count > 0 else ""
@@ -945,6 +976,9 @@ def add_from_url(is_refresh=False):
 
     if not is_refresh: 
         log_message("Неверный формат ссылки", "#E74C3C")
+
+
+
 
 def update_all_subscriptions():
     if not base64_urls:
@@ -1072,6 +1106,9 @@ def on_ping_all_click():
             if xray_process and xray_process.poll() is None and active_tag == t:
                 ms, _ = real_proxy_ping(timeout=4.0)
                 return t, ms
+            # Выключенный Автоконфиг не опрашиваем — для него будет прочерк
+            if t == AUTO_CONFIG_TAG:
+                return t, -2
             config_path = os.path.join(CONFIGS_DIR, f"{t}.json")
             host, port, sni = get_server_endpoint_from_config(config_path)
             if host and port:
@@ -1083,15 +1120,20 @@ def on_ping_all_click():
             results = list(executor.map(check_tag, tags))
 
         valid_results = [r for r in results if r[1] >= 0]
+        # Для подсчета не учитываем выключенный автоконфиг в общем числе узлов
+        nodes_to_count = [t for t in tags if not (t == AUTO_CONFIG_TAG and (xray_process is None or active_tag != t))]
 
         def update_ui():
             for original_tag in tags:
                 ms = next((r[1] for r in results if r[0] == original_tag), -1)
-                res_str = f"{ms} ms" if ms >= 0 else "Ошибка"
+                if original_tag == AUTO_CONFIG_TAG and ms < 0:
+                    res_str = "—"
+                else:
+                    res_str = f"{ms} ms" if ms >= 0 else "Ошибка"
                 config_list.update_ping(original_tag, res_str)
 
             btn_ping_all.configure(state="normal", text="Пинг")
-            log_message(f"Проверка завершена. Доступно: {len(valid_results)} из {len(tags)}", "#2ECC71" if valid_results else "#E74C3C")
+            log_message(f"Проверка завершена. Доступно: {len(valid_results)} из {len(nodes_to_count)}", "#2ECC71" if valid_results else "#E74C3C")
 
             # Отображаем цифры пинга 15 секунд для комфортного ознакомления
             root.after(15000, lambda: [config_list.update_ping(t, "") for t in tags])
@@ -1111,6 +1153,9 @@ def on_context_ping_click():
             ms, status = real_proxy_ping(timeout=4.0)
             res_str = f"{ms} ms" if ms >= 0 else status
             check_type = "Туннель SOCKS5"
+        elif tag == AUTO_CONFIG_TAG:
+            res_str = "—"
+            check_type = "Автоконфиг"
         else:
             config_path = os.path.join(CONFIGS_DIR, f"{tag}.json")
             host, port, sni = get_server_endpoint_from_config(config_path)
@@ -1124,12 +1169,17 @@ def on_context_ping_click():
 
         def update_ui():
             config_list.update_ping(tag, res_str)
-            log_message(f"[{check_type}] {tag}: {res_str}")
+            if tag == AUTO_CONFIG_TAG and not is_running_now:
+                log_message(f"{tag}: замер доступен при запуске", "#BDC3C7")
+            else:
+                log_message(f"[{check_type}] {tag}: {res_str}")
             # Держим результат пинга 15 секунд
             root.after(15000, lambda: config_list.update_ping(tag, ""))
         root.after(0, update_ui)
         
     threading.Thread(target=ping_task, daemon=True).start()
+
+
 
 def on_context_delete_config():
     tag = config_list.selected_tag
