@@ -20,6 +20,7 @@ import concurrent.futures
 import urllib.parse
 from urllib.parse import urlparse, parse_qs, unquote
 import socket
+import tempfile
 
 # Пытаемся подключить библиотеку для системного трея
 try:
@@ -1201,6 +1202,7 @@ def parse_version(v_str):
     nums = re.findall(r'\d+', str(v_str))
     return tuple(map(int, nums)) if nums else (0,)
 
+
 def download_and_install_update(download_url, new_version):
     """Фоновое скачивание и безопасный перезапуск для PyInstaller --onefile"""
     def _worker():
@@ -1214,7 +1216,7 @@ def download_and_install_update(download_url, new_version):
             log_message(f"Скачивание обновления {new_version}...", "#3498DB")
             temp_exe = current_exe + ".new"
 
-            with requests.get(download_url, stream=True, timeout=30) as r:
+            with requests.get(download_url, stream=True, timeout=60) as r:
                 r.raise_for_status()
                 with open(temp_exe, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=65536):
@@ -1224,23 +1226,51 @@ def download_and_install_update(download_url, new_version):
             log_message("Установка и перезапуск...", "#2ECC71")
             time.sleep(0.5)
 
+            current_pid = os.getpid()
+            bat_path = os.path.join(tempfile.gettempdir(), f"winload_updater_{current_pid}.bat")
+
+            # Скрипт в цикле ожидает разблокировки файла и запускает новый exe только после успешной замены
+            bat_content = f"""@echo off
+chcp 65001 > nul
+set PYINSTALLER_RESET_ENVIRONMENT=1
+set attempts=0
+
+:loop
+set /a attempts+=1
+if %attempts% gtr 30 goto fail
+
+ping 127.0.0.1 -n 2 > nul
+
+:: Если процесс все еще держит файл через 4 секунды — форсированно снимаем его
+if %attempts% gtr 4 (
+    taskkill /F /PID {current_pid} > nul 2>&1
+)
+
+move /y "{temp_exe}" "{current_exe}" > nul 2>&1
+if exist "{temp_exe}" goto loop
+
+:: Запуск новой версии только после успешной замены файла
+start "" "{current_exe}"
+goto cleanup
+
+:fail
+del /f /q "{temp_exe}" > nul 2>&1
+
+:cleanup
+del /f /q "%~f0" > nul 2>&1
+"""
+
+            with open(bat_path, "w", encoding="utf-8") as bf:
+                bf.write(bat_content)
+
             clean_env = os.environ.copy()
             for key in list(clean_env.keys()):
                 if key.startswith(("_PYI", "_MEI")):
                     clean_env.pop(key, None)
-            
             clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
 
-            cmd = (
-                f'set PYINSTALLER_RESET_ENVIRONMENT=1 & '
-                f'ping 127.0.0.1 -n 3 > nul & '
-                f'move /y "{temp_exe}" "{current_exe}" & '
-                f'start "" "{current_exe}"'
-            )
-
             subprocess.Popen(
-                cmd,
-                shell=True,
+                ["cmd.exe", "/c", bat_path],
                 env=clean_env,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
@@ -1255,6 +1285,9 @@ def download_and_install_update(download_url, new_version):
                 except: pass
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+
 
 # --- Доп функции (Update, Autostart) ---
 def check_latest_version():
