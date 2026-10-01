@@ -38,7 +38,7 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.30-beta"
+APP_VERS = "v1.32-beta"
 XRAY_VERS = "v26.7.28"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
@@ -562,7 +562,7 @@ def generate_balancer_config():
                 "tag": "socks-in",
                 "port": 2080,
                 "listen": "127.0.0.1",
-                "protocol": "socks",
+                "protocol": "mixed",
                 "settings": {"udp": True, "auth": "noauth"}
             }
         ]
@@ -570,9 +570,16 @@ def generate_balancer_config():
     balancers = []
     rules = []
 
+    # 0. Разрешаем метрику
+    rules.append({
+        "domain": [
+            "domain:metrika.yandex.ru"
+        ],
+        "outboundTag": "direct"
+    })    
+    
     # 1. Блокировка рекламы и телеметрии
     rules.append({
-        "type": "field",
         "domain": [
             "geosite:category-ads",
             "geosite:win-spy"
@@ -582,7 +589,6 @@ def generate_balancer_config():
 
     # 2. Торренты мимо прокси (напрямую)
     rules.append({
-        "type": "field",
         "protocol": ["bittorrent"],
         "outboundTag": "direct"
     })
@@ -598,7 +604,6 @@ def generate_balancer_config():
             "fallbackTag": "node-g-0"
         })
         rules.append({
-            "type": "field",
             "domain": [
                 "geosite:google-gemini",
                 "domain:gemini.google.com",
@@ -611,7 +616,6 @@ def generate_balancer_config():
 
     # 4. Исключения (сайты, которые должны идти через прокси, даже если это .ru или СНГ)
     rules.append({
-        "type": "field",
         "domain": [
             "habr.com",
             "apkmirror.com"
@@ -621,7 +625,6 @@ def generate_balancer_config():
 
     # 5. Российские домены и сервисы — напрямую (DIRECT)
     rules.append({
-        "type": "field",
         "domain": [
             "geosite:private",
             "ifconfig.me",
@@ -642,7 +645,6 @@ def generate_balancer_config():
 
     # 6. Российские IP-адреса — напрямую (DIRECT)
     rules.append({
-        "type": "field",
         "ip": [
             "geoip:ru",
             "geoip:private"
@@ -661,7 +663,6 @@ def generate_balancer_config():
         "fallbackTag": fallback_node
     })
     rules.append({
-        "type": "field",
         "network": "tcp,udp",
         "balancerTag": "auto-balancer"
     })
