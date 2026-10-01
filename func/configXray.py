@@ -62,6 +62,12 @@ def generate_config(data):
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {
+                    "domain": [ 
+                        "domain:metrika.yandex.ru" 
+                    ],
+                    "outboundTag": "direct" 
+                },
+                {
                     "domain": [
                         "geosite:category-ads",
                         "geosite:win-spy"
