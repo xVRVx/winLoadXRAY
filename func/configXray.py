@@ -147,18 +147,22 @@ def generate_config(data):
         if isinstance(alpn, str):
             alpn = [a.strip() for a in alpn.split(",") if a.strip()]
 
-        # Скорость Brutal (по умолчанию надежные 70 mbps)
-        up = data.get("up") or data.get("up_mbps") or "70 mbps"
-        down = data.get("down") or data.get("down_mbps") or "70 mbps"
-        up_val = f"{up} mbps" if not str(up).endswith("bps") else str(up)
-        down_val = f"{down} mbps" if not str(down).endswith("bps") else str(down)
+        # По умолчанию ставим bbr
+        congestion = data.get("congestion", "bbr").lower()
+
+        quic_params = {
+            "congestion": congestion
+        }
+
+        # brutalUp/brutalDown добавляем только в том случае, если явно выбран brutal
+        if congestion == "brutal":
+            up = data.get("up") or data.get("up_mbps") or "100 mbps"
+            down = data.get("down") or data.get("down_mbps") or "100 mbps"
+            quic_params["brutalUp"] = f"{up} mbps" if not str(up).endswith("bps") else str(up)
+            quic_params["brutalDown"] = f"{down} mbps" if not str(down).endswith("bps") else str(down)
 
         finalmask = {
-            "quicParams": {
-                "congestion": data.get("congestion", "brutal"),
-                "brutalUp": up_val,
-                "brutalDown": down_val
-            }
+            "quicParams": quic_params
         }
 
         # Если передана обфускация salamander
