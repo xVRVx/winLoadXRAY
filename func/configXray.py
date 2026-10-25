@@ -69,8 +69,7 @@ def generate_config(data):
                 },
                 {
                     "domain": [
-                        "geosite:category-ads",
-                        "geosite:win-spy"
+                        "geosite:category-ads"
                     ],
                     "outboundTag": "block"
                 },
