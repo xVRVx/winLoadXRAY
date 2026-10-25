@@ -38,8 +38,8 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.34-beta"
-XRAY_VERS = "v26.9.9"
+APP_VERS = "v1.35-beta"
+XRAY_VERS = "v26.10.21"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
 
@@ -581,8 +581,7 @@ def generate_balancer_config():
     # 1. Блокировка рекламы и телеметрии
     rules.append({
         "domain": [
-            "geosite:category-ads",
-            "geosite:win-spy"
+            "geosite:category-ads"
         ],
         "outboundTag": "block"
     })
