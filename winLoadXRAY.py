@@ -38,8 +38,8 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.35-beta"
-XRAY_VERS = "v26.10.21"
+APP_VERS = "v1.36-beta"
+XRAY_VERS = "v26.10.31"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
 
