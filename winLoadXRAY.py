@@ -38,8 +38,8 @@ from copyPast import cmd_copy, cmd_cut, cmd_select_all
 ctk.set_appearance_mode("dark")
 
 APP_NAME = "winLoadXRAY"
-APP_VERS = "v1.36-beta"
-XRAY_VERS = "v26.10.31"
+APP_VERS = "v1.38-beta"
+XRAY_VERS = "v26.11.9"
 
 AUTO_CONFIG_TAG = "⚡ Автоконфиг"
 
@@ -616,8 +616,8 @@ def generate_balancer_config():
     # 4. Исключения (сайты, которые должны идти через прокси, даже если это .ru или СНГ)
     rules.append({
         "domain": [
-            "habr.com",
-            "apkmirror.com"
+            "domain:habr.com",
+            "domain:apkmirror.com"
         ],
         "balancerTag": "auto-balancer"
     })
@@ -626,9 +626,9 @@ def generate_balancer_config():
     rules.append({
         "domain": [
             "geosite:private",
-            "ifconfig.me",
-            "checkip.amazonaws.com",
-            "pify.org",
+            "domain:ifconfig.me",
+            "domain:checkip.amazonaws.com",
+            "domain:pify.org",
             "domain:ru",
             "domain:su",
             "domain:xn--p1ai",
@@ -672,6 +672,26 @@ def generate_balancer_config():
 
     master_config = {
         "log": {"loglevel": "warning"},
+          "dns": {
+            "servers": [
+              {
+                "address": "https+local://77.88.8.8/dns-query",
+                "domains": [
+                  "geosite:category-ru",
+                  "geosite:yandex",
+                  "geosite:vk",
+                  "domain:ru",
+                  "domain:su",
+                  "domain:xn--p1ai"
+                ],
+                "skipFallback": True
+              },
+              "https://8.8.4.4/dns-query",
+              "https://8.8.8.8/dns-query",
+              "https://1.1.1.1/dns-query"
+            ],
+            "queryStrategy": "UseIPv4"
+          },
         "inbounds": base_inbounds,
         "observatory": {
             "subjectSelector": ["node-"],
@@ -681,7 +701,7 @@ def generate_balancer_config():
         },
         "routing": {
             "domainMatcher": "hybrid",
-            "domainStrategy": "IPIfNonMatch",
+            "domainStrategy": "IPOnDemand",
             "balancers": balancers,
             "rules": rules
         },
